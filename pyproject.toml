@@ -1,0 +1,8 @@
+[project]
+name = "political-emails"
+version = "0.1.0"
+description = "Incremental collection and archive of political fundraising emails"
+requires-python = ">=3.12"
+dependencies = [
+    "html2text>=2024.2.26",
+]
