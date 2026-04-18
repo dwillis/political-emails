@@ -26,6 +26,23 @@ MONTH_NAMES = {
 }
 
 
+# Fixed timestamp for deterministic ZIP creation (2020-01-01 00:00:00).
+# Using a fixed date_time on every entry means identical inputs produce
+# identical ZIP bytes, so git only creates a new commit when data changes.
+_FIXED_ZIP_TIMESTAMP = (2020, 1, 1, 0, 0, 0)
+
+
+def _add_to_zip(zf, file_path, arcname):
+    """Add a file to a ZIP with a fixed timestamp for deterministic output."""
+    with open(file_path, "rb") as f:
+        data = f.read()
+    info = zipfile.ZipInfo(filename=arcname, date_time=_FIXED_ZIP_TIMESTAMP)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    # Fix external attributes so file mode is stable across platforms
+    info.external_attr = 0o644 << 16
+    zf.writestr(info, data)
+
+
 def human_size(nbytes):
     """Format byte count as human-readable string."""
     for unit in ["B", "KB", "MB", "GB"]:
@@ -70,28 +87,65 @@ def scan_data():
 
 
 def compute_stats(years):
-    """Compute aggregate stats across all data."""
+    """Single-pass scan over JSONL files, return rich stats dict.
+
+    years: output of scan_data().
+
+    Returns dict with:
+        total_records, disclaimer_count,
+        party_counts: {"D", "R", "unknown"},
+        unique_domains: int,
+        by_year: { year: {total, D, R, unknown, disclaimer} },
+        top_domains: [(domain, count), ...]  sorted desc, top 10.
+    """
+    from collections import Counter
+
     total_records = 0
-    unique_domains = set()
+    disclaimer_count = 0
+    party_counts = {"D": 0, "R": 0, "unknown": 0}
+    domain_counter = Counter()
+    by_year = {}
 
     for year, months in years.items():
+        year_stats = {"total": 0, "D": 0, "R": 0, "unknown": 0, "disclaimer": 0}
         for month_num, days in months.items():
             for d in days:
-                total_records += d["records"]
-                # Read domains from JSONL for stats
                 with open(d["path"]) as f:
                     for line in f:
                         line = line.strip()
-                        if line:
-                            try:
-                                rec = json.loads(line)
-                                domain = rec.get("domain")
-                                if domain:
-                                    unique_domains.add(domain)
-                            except json.JSONDecodeError:
-                                continue
+                        if not line:
+                            continue
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
 
-    return total_records, len(unique_domains)
+                        total_records += 1
+                        year_stats["total"] += 1
+
+                        party = rec.get("party")
+                        bucket = party if party in ("D", "R") else "unknown"
+                        party_counts[bucket] += 1
+                        year_stats[bucket] += 1
+
+                        if rec.get("disclaimer"):
+                            disclaimer_count += 1
+                            year_stats["disclaimer"] += 1
+
+                        domain = rec.get("domain")
+                        if domain:
+                            domain_counter[domain] += 1
+        if year_stats["total"] > 0:
+            by_year[year] = year_stats
+
+    return {
+        "total_records": total_records,
+        "disclaimer_count": disclaimer_count,
+        "party_counts": party_counts,
+        "unique_domains": len(domain_counter),
+        "by_year": by_year,
+        "top_domains": domain_counter.most_common(10),
+    }
 
 
 def build_downloads(years):
@@ -120,8 +174,8 @@ def build_downloads(years):
                 zip_name = f"{year}-{month_num}.zip"
                 zip_path = DOWNLOADS_DIR / zip_name
                 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for d in days:
-                        zf.write(d["path"], arcname=f"{year}/{month_num}/{d['filename']}")
+                    for d in sorted(days, key=lambda x: x["filename"]):
+                        _add_to_zip(zf, d["path"], f"{year}/{month_num}/{d['filename']}")
 
                 month_downloads.append({
                     "month_num": month_num,
@@ -143,8 +197,8 @@ def build_downloads(years):
             zip_path = DOWNLOADS_DIR / zip_name
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 for month_num in sorted(months.keys()):
-                    for d in months[month_num]:
-                        zf.write(d["path"], arcname=f"{year}/{month_num}/{d['filename']}")
+                    for d in sorted(months[month_num], key=lambda x: x["filename"]):
+                        _add_to_zip(zf, d["path"], f"{year}/{month_num}/{d['filename']}")
 
             month_list = []
             for month_num in sorted(months.keys()):
@@ -517,7 +571,9 @@ def main():
         print("  No data found in data/ directory. Run migrate_mbox.py first.")
         return
 
-    total_records, unique_domains = compute_stats(years)
+    stats = compute_stats(years)
+    total_records = stats["total_records"]
+    unique_domains = stats["unique_domains"]
     print(f"  Total records: {total_records:,}")
     print(f"  Unique domains: {unique_domains:,}")
 
