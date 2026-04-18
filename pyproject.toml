@@ -6,3 +6,12 @@ requires-python = ">=3.12"
 dependencies = [
     "html2text>=2024.2.26",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["scripts"]
+testpaths = ["tests"]
