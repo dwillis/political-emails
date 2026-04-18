@@ -120,6 +120,18 @@ SHARED_CSS = f"""
     .dl-link:hover {{ background: var(--primary); color: white; }}
     .dl-zip {{ font-size: 0.95rem; padding: 0.4rem 1rem; }}
 
+    .dl-row {{
+      display: flex; align-items: center; gap: 1rem;
+      padding: 0.6rem 0.8rem;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      margin-bottom: 0.5rem;
+      flex-wrap: wrap;
+    }}
+    .dl-label {{ font-weight: 600; color: var(--primary); }}
+    .dl-meta {{ color: #888; font-size: 0.9rem; }}
+
     footer {{
       text-align: center;
       padding: 2rem 1rem;
@@ -437,17 +449,6 @@ def generate_dashboard_html(stats, download_info):
       border-radius: 4px;
       padding: 1rem;
     }
-    .dl-row {
-      display: flex; align-items: center; gap: 1rem;
-      padding: 0.6rem 0.8rem;
-      background: white;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      margin-bottom: 0.5rem;
-      flex-wrap: wrap;
-    }
-    .dl-label { font-weight: 600; color: var(--primary); }
-    .dl-meta { color: #888; font-size: 0.9rem; }
     .dl-all { margin-top: 0.6rem; }
     """
 
@@ -550,7 +551,7 @@ def generate_downloads_html(download_info):
             )
             content = f"""        <div class="archive-row">
           <a href="downloads/{info['zip_name']}" class="dl-link dl-zip">Download {year}.zip</a>
-          <span class="meta">{info['zip_size']} &middot; {info['total_records']:,} records</span>
+          <span class="dl-meta">{info['zip_size']} &middot; {info['total_records']:,} records</span>
         </div>
         <p class="months-covered">{month_list}</p>"""
 
@@ -603,7 +604,6 @@ def generate_downloads_html(download_info):
       display: flex; align-items: center; gap: 1rem;
       margin-bottom: 0.5rem;
     }
-    .meta { font-size: 0.85rem; color: #888; }
     .months-covered { font-size: 0.8rem; color: #aaa; }
     """
 
@@ -618,7 +618,7 @@ def generate_downloads_html(download_info):
 </head>
 <body>
   <header>
-    <h1>Downloads</h1>
+    <h1>Downloads — Political <span>Email</span> Archive</h1>
     <p>All monthly and yearly JSONL archives ({year_range}).</p>
     <div class="header-links">
       <a href="index.html">← Dashboard</a>
