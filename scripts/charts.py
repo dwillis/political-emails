@@ -191,3 +191,115 @@ def horizontal_bar_chart(data, title, color):
 
     parts.append("</svg>")
     return "".join(parts)
+
+
+# --- Stacked bar chart ----------------------------------------------------
+
+def stacked_bar_chart(data, categories, colors, title):
+    """Render a stacked vertical bar chart.
+
+    Args:
+        data: dict { x_label: { category: value, ... } }
+        categories: list of category keys in stacking order (bottom -> top).
+        colors: dict mapping category -> CSS color.
+        title: str — chart title.
+
+    Returns: SVG string.
+    """
+    aria = f"{title}. " + ", ".join(
+        f"{x}: " + "/".join(f"{c}={_format_int(v.get(c, 0))}" for c in categories)
+        for x, v in data.items()
+    )
+    parts = [_svg_open(aria)]
+
+    # Title
+    parts.append(
+        f'<text x="{_VB_WIDTH / 2}" y="24" text-anchor="middle" '
+        f'font-size="18" font-weight="700" fill="{_TITLE_DARK}" '
+        f'font-family="Libre Baskerville, Georgia, serif">{escape(title)}</text>'
+    )
+
+    # Legend (below title, above plot)
+    legend_y = 46
+    legend_x = _MARGIN_LEFT
+    for cat in categories:
+        parts.append(
+            f'<rect x="{legend_x}" y="{legend_y - 10}" width="12" height="12" '
+            f'fill="{colors[cat]}"/>'
+        )
+        parts.append(
+            f'<text x="{legend_x + 18}" y="{legend_y}" '
+            f'font-size="12" fill="{_LABEL_DARK}">{escape(str(cat))}</text>'
+        )
+        legend_x += 18 + len(str(cat)) * 8 + 24
+
+    if not data:
+        parts.append(
+            f'<text x="{_VB_WIDTH / 2}" y="{_VB_HEIGHT / 2}" '
+            f'text-anchor="middle" fill="{_AXIS_GRAY}">No data</text>'
+        )
+        parts.append("</svg>")
+        return "".join(parts)
+
+    plot_x = _MARGIN_LEFT
+    plot_y = _MARGIN_TOP + 30  # extra space for legend
+    plot_w = _VB_WIDTH - _MARGIN_LEFT - _MARGIN_RIGHT
+    plot_h = _VB_HEIGHT - plot_y - _MARGIN_BOTTOM
+
+    # Totals per x-value
+    totals = {x: sum(v.get(c, 0) for c in categories) for x, v in data.items()}
+    max_val = _nice_max(max(totals.values()) if totals else 1)
+
+    n = len(data)
+    slot_w = plot_w / n
+    bar_w = slot_w * 0.7
+
+    # Gridlines + y-axis labels
+    for frac in (0, 0.25, 0.5, 0.75, 1.0):
+        y = plot_y + plot_h - plot_h * frac
+        parts.append(
+            f'<line x1="{plot_x}" y1="{y}" x2="{plot_x + plot_w}" y2="{y}" '
+            f'stroke="#eee" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{plot_x - 8}" y="{y + 4}" text-anchor="end" '
+            f'font-size="11" fill="{_AXIS_GRAY}">'
+            f'{_format_int(max_val * frac)}</text>'
+        )
+
+    # Stacks
+    for i, (x_label, seg) in enumerate(data.items()):
+        total = totals[x_label] or 1  # avoid zero-div for percent labels
+        bx = plot_x + slot_w * i + (slot_w - bar_w) / 2
+
+        # Stack from bottom up
+        running = 0
+        for cat in categories:
+            val = seg.get(cat, 0)
+            if val <= 0:
+                continue
+            seg_h = plot_h * (val / max_val) if max_val > 0 else 0
+            sy = plot_y + plot_h - plot_h * ((running + val) / max_val)
+            parts.append(
+                f'<rect x="{bx}" y="{sy}" width="{bar_w}" height="{seg_h}" '
+                f'fill="{colors[cat]}"/>'
+            )
+            # Percent label if segment >= 8% of bar total
+            pct = val / total
+            if pct >= 0.08 and seg_h >= 16:
+                parts.append(
+                    f'<text x="{bx + bar_w / 2}" y="{sy + seg_h / 2 + 4}" '
+                    f'text-anchor="middle" font-size="10" fill="white">'
+                    f'{int(pct * 100)}%</text>'
+                )
+            running += val
+
+        # x-axis label
+        parts.append(
+            f'<text x="{bx + bar_w / 2}" y="{plot_y + plot_h + 18}" '
+            f'text-anchor="middle" font-size="12" fill="{_LABEL_DARK}">'
+            f'{escape(str(x_label))}</text>'
+        )
+
+    parts.append("</svg>")
+    return "".join(parts)

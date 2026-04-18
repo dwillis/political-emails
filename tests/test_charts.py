@@ -85,3 +85,67 @@ def test_horizontal_bar_chart_handles_empty_data():
     svg = horizontal_bar_chart([], title="Empty", color="#e89b3c")
     assert svg.startswith("<svg")
     assert svg.endswith("</svg>")
+from charts import stacked_bar_chart
+
+
+def _sample_stacked():
+    return {
+        "2024": {"D": 60, "R": 30, "unknown": 10},
+        "2025": {"D": 50, "R": 40, "unknown": 10},
+    }
+
+
+def test_stacked_bar_chart_contains_svg_root():
+    svg = stacked_bar_chart(
+        _sample_stacked(),
+        categories=["D", "R", "unknown"],
+        colors={"D": "#2b6cb0", "R": "#c53030", "unknown": "#a0aec0"},
+        title="Test",
+    )
+    assert svg.startswith("<svg")
+
+
+def test_stacked_bar_chart_includes_all_segment_colors():
+    svg = stacked_bar_chart(
+        _sample_stacked(),
+        categories=["D", "R", "unknown"],
+        colors={"D": "#2b6cb0", "R": "#c53030", "unknown": "#a0aec0"},
+        title="Test",
+    )
+    assert "#2b6cb0" in svg
+    assert "#c53030" in svg
+    assert "#a0aec0" in svg
+
+
+def test_stacked_bar_chart_includes_year_labels():
+    svg = stacked_bar_chart(
+        _sample_stacked(),
+        categories=["D", "R", "unknown"],
+        colors={"D": "#2b6cb0", "R": "#c53030", "unknown": "#a0aec0"},
+        title="Test",
+    )
+    assert ">2024<" in svg
+    assert ">2025<" in svg
+
+
+def test_stacked_bar_chart_has_legend():
+    svg = stacked_bar_chart(
+        _sample_stacked(),
+        categories=["D", "R", "unknown"],
+        colors={"D": "#2b6cb0", "R": "#c53030", "unknown": "#a0aec0"},
+        title="Test",
+    )
+    # Legend labels appear in addition to within-bar labels
+    assert svg.count(">D<") >= 1
+    assert svg.count(">R<") >= 1
+
+
+def test_stacked_bar_chart_handles_empty_data():
+    svg = stacked_bar_chart(
+        {},
+        categories=["D", "R", "unknown"],
+        colors={"D": "#2b6cb0", "R": "#c53030", "unknown": "#a0aec0"},
+        title="Empty",
+    )
+    assert svg.startswith("<svg")
+    assert svg.endswith("</svg>")
