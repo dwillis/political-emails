@@ -43,3 +43,45 @@ def test_vertical_bar_chart_handles_empty_data():
     svg = vertical_bar_chart({}, title="Empty", color="#e89b3c")
     assert svg.startswith("<svg")
     assert svg.endswith("</svg>")
+
+
+from charts import horizontal_bar_chart
+
+
+def test_horizontal_bar_chart_contains_svg_root():
+    svg = horizontal_bar_chart(
+        [("actblue.com", 100), ("winred.com", 50)],
+        title="Test",
+        color="#e89b3c",
+    )
+    assert svg.startswith("<svg")
+    assert svg.endswith("</svg>")
+
+
+def test_horizontal_bar_chart_includes_labels_and_values():
+    svg = horizontal_bar_chart(
+        [("actblue.com", 100), ("winred.com", 50)],
+        title="Test",
+        color="#e89b3c",
+    )
+    assert "actblue.com" in svg
+    assert "winred.com" in svg
+    assert "100" in svg
+    assert "50" in svg
+
+
+def test_horizontal_bar_chart_includes_title():
+    svg = horizontal_bar_chart([("foo", 10)], title="My Title", color="#e89b3c")
+    assert ">My Title<" in svg
+
+
+def test_horizontal_bar_chart_has_accessibility_attrs():
+    svg = horizontal_bar_chart([("foo", 10)], title="T", color="#e89b3c")
+    assert 'role="img"' in svg
+    assert 'aria-label=' in svg
+
+
+def test_horizontal_bar_chart_handles_empty_data():
+    svg = horizontal_bar_chart([], title="Empty", color="#e89b3c")
+    assert svg.startswith("<svg")
+    assert svg.endswith("</svg>")

@@ -123,3 +123,71 @@ def vertical_bar_chart(data, title, color):
 
     parts.append("</svg>")
     return "".join(parts)
+
+
+# --- Horizontal bar chart -------------------------------------------------
+
+def horizontal_bar_chart(data, title, color):
+    """Render a horizontal bar chart.
+
+    Args:
+        data: list of (label, value) tuples, already sorted (largest first).
+        title: str — chart title.
+        color: str — CSS color for bars.
+
+    Returns: SVG string.
+    """
+    aria = f"{title}. " + ", ".join(f"{k}: {_format_int(v)}" for k, v in data)
+    parts = [_svg_open(aria)]
+
+    parts.append(
+        f'<text x="{_VB_WIDTH / 2}" y="24" text-anchor="middle" '
+        f'font-size="18" font-weight="700" fill="{_TITLE_DARK}" '
+        f'font-family="Libre Baskerville, Georgia, serif">{escape(title)}</text>'
+    )
+
+    if not data:
+        parts.append(
+            f'<text x="{_VB_WIDTH / 2}" y="{_VB_HEIGHT / 2}" '
+            f'text-anchor="middle" fill="{_AXIS_GRAY}">No data</text>'
+        )
+        parts.append("</svg>")
+        return "".join(parts)
+
+    label_col_w = 180
+    value_col_w = 60
+    plot_x = _MARGIN_LEFT + label_col_w
+    plot_w = _VB_WIDTH - plot_x - _MARGIN_RIGHT - value_col_w
+    plot_y = _MARGIN_TOP
+    plot_h = _VB_HEIGHT - _MARGIN_TOP - _MARGIN_BOTTOM
+
+    n = len(data)
+    bar_h = min(24, (plot_h - (n - 1) * 8) / n) if n > 0 else 24
+    slot_h = bar_h + 8
+
+    max_val = max(v for _, v in data)
+    max_val = _nice_max(max_val)
+
+    for i, (label, val) in enumerate(data):
+        y = plot_y + i * slot_h
+        w = plot_w * (val / max_val) if max_val > 0 else 0
+
+        # Label (left-aligned in label column)
+        parts.append(
+            f'<text x="{plot_x - 10}" y="{y + bar_h / 2 + 4}" '
+            f'text-anchor="end" font-size="12" fill="{_LABEL_DARK}">'
+            f'{escape(str(label))}</text>'
+        )
+        # Bar
+        parts.append(
+            f'<rect x="{plot_x}" y="{y}" width="{w}" height="{bar_h}" '
+            f'fill="{color}"/>'
+        )
+        # Value (right of bar)
+        parts.append(
+            f'<text x="{plot_x + w + 6}" y="{y + bar_h / 2 + 4}" '
+            f'font-size="12" fill="{_LABEL_DARK}">{_format_int(val)}</text>'
+        )
+
+    parts.append("</svg>")
+    return "".join(parts)
