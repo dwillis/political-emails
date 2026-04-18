@@ -3,3 +3,8 @@ __pycache__/
 .venv/
 *.egg-info/
 .DS_Store
+
+# Generated site output — built by build_site.py in CI and deployed
+# as a GitHub Pages artifact. Not committed to avoid repo bloat
+# (yearly ZIP archives exceed GitHub's 100MB file limit).
+docs/
