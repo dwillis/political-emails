@@ -9,7 +9,7 @@ import json
 import os
 import shutil
 import zipfile
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from utils import DATA_DIR, count_records
@@ -338,7 +338,87 @@ def build_downloads(years):
     return download_info
 
 
-def generate_dashboard_html(stats, download_info):
+def _truncate_preview(text, limit=200):
+    """Truncate to ~limit chars on a word boundary, collapsing whitespace."""
+    if not text:
+        return ""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    space = cut.rfind(" ")
+    if space > limit * 0.6:
+        cut = cut[:space]
+    return cut + "…"
+
+
+def build_recent(hours=24):
+    """Read the last 24h of records from today/yesterday's JSONL, write docs/recent.json.
+
+    Returns a summary dict: {count, start_iso, end_iso, window_hours}.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=hours)
+
+    candidate_dates = [(now - timedelta(days=offset)).date() for offset in range(2)]
+    candidate_paths = [
+        DATA_DIR / f"{d.year:04d}" / f"{d.month:02d}" / f"{d.year:04d}-{d.month:02d}-{d.day:02d}.jsonl"
+        for d in candidate_dates
+    ]
+
+    records = []
+    for path in candidate_paths:
+        if not path.exists():
+            continue
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                date_str = rec.get("date")
+                if not date_str:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(date_str)
+                except ValueError:
+                    continue
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if ts < cutoff:
+                    continue
+                preview = _truncate_preview(rec.get("clean_body") or rec.get("body") or "")
+                records.append({
+                    "ts": ts.astimezone(timezone.utc).isoformat(),
+                    "name": rec.get("name") or "",
+                    "email": rec.get("email") or "",
+                    "domain": rec.get("domain") or "",
+                    "subject": rec.get("subject") or "",
+                    "preview": preview,
+                    "party": rec.get("party"),
+                    "disclaimer": bool(rec.get("disclaimer")),
+                })
+
+    records.sort(key=lambda r: r["ts"], reverse=True)
+
+    summary = {
+        "generated_at": now.isoformat(),
+        "window_hours": hours,
+        "start_iso": cutoff.isoformat(),
+        "end_iso": now.isoformat(),
+        "count": len(records),
+    }
+    payload = {**summary, "emails": records}
+
+    DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    (DOCS_DIR / "recent.json").write_text(json.dumps(payload, ensure_ascii=False))
+    return summary
+
+
+def generate_dashboard_html(stats, download_info, recent_summary):
     """Generate the dashboard home page (index.html)."""
     year_range = (
         f"{min(stats['by_year'].keys())}–{max(stats['by_year'].keys())}"
@@ -450,6 +530,97 @@ def generate_dashboard_html(stats, download_info):
       padding: 1rem;
     }
     .dl-all { margin-top: 0.6rem; }
+
+    .recent-meta {
+      font-size: 0.85rem; color: #777; margin-bottom: 0.8rem;
+    }
+    .filter-bar {
+      display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem;
+      align-items: center;
+      margin-bottom: 1rem;
+      padding: 0.6rem 0.8rem;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+    .filter-group { display: flex; gap: 0.3rem; align-items: center; }
+    .filter-group .label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #888;
+      margin-right: 0.25rem;
+    }
+    .filter-chip {
+      font: inherit;
+      cursor: pointer;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.2rem 0.7rem;
+      font-size: 0.85rem;
+      color: var(--text);
+    }
+    .filter-chip:hover { border-color: var(--primary); }
+    .filter-chip.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+    .filter-count { margin-left: auto; font-size: 0.8rem; color: #888; }
+
+    .email-card {
+      background: white;
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--border);
+      border-radius: 4px;
+      padding: 0.7rem 0.9rem;
+      margin-bottom: 0.5rem;
+    }
+    .email-card.party-D { border-left-color: #2b6cb0; }
+    .email-card.party-R { border-left-color: #c53030; }
+    .email-card.party-unknown { border-left-color: #a0aec0; }
+    .email-card.hidden { display: none; }
+    .email-meta {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+      font-size: 0.8rem; color: #666;
+      margin-bottom: 0.25rem;
+    }
+    .email-meta .ts { font-variant-numeric: tabular-nums; color: #999; }
+    .email-meta .sender { color: var(--text); font-weight: 600; }
+    .email-meta .addr { color: #999; font-size: 0.78rem; }
+    .party-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      padding: 0.05rem 0.4rem;
+      border-radius: 3px;
+      color: white;
+    }
+    .party-badge.D { background: #2b6cb0; }
+    .party-badge.R { background: #c53030; }
+    .party-badge.unknown { background: #a0aec0; }
+    .disclaimer-tag {
+      font-size: 0.7rem;
+      color: var(--primary);
+      border: 1px solid var(--primary);
+      border-radius: 3px;
+      padding: 0.02rem 0.35rem;
+    }
+    .email-subject {
+      font-size: 1.02rem; font-weight: 600; color: var(--text);
+      margin: 0.1rem 0 0.25rem;
+    }
+    .email-preview {
+      font-size: 0.88rem; color: #555;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .recent-empty, .recent-error {
+      padding: 1rem; background: white;
+      border: 1px dashed var(--border); border-radius: 4px;
+      color: #777; font-size: 0.9rem;
+    }
     """
 
     html = f"""<!DOCTYPE html>
@@ -494,6 +665,26 @@ def generate_dashboard_html(stats, download_info):
       </div>
     </section>
 
+    <h2>Latest emails — past 24 hours</h2>
+    <p class="recent-meta">{recent_summary["count"]:,} emails received in the last 24 hours (as of {recent_summary["end_iso"][:16].replace("T", " ")} UTC).</p>
+    <div class="filter-bar">
+      <div class="filter-group">
+        <span class="label">Party</span>
+        <button class="filter-chip active" data-filter="party" data-value="all">All</button>
+        <button class="filter-chip" data-filter="party" data-value="D">D</button>
+        <button class="filter-chip" data-filter="party" data-value="R">R</button>
+        <button class="filter-chip" data-filter="party" data-value="unknown">Unknown</button>
+      </div>
+      <div class="filter-group">
+        <span class="label">Disclaimer</span>
+        <button class="filter-chip active" data-filter="disclaimer" data-value="any">Any</button>
+        <button class="filter-chip" data-filter="disclaimer" data-value="yes">With</button>
+        <button class="filter-chip" data-filter="disclaimer" data-value="no">Without</button>
+      </div>
+      <span class="filter-count" id="filter-count"></span>
+    </div>
+    <div id="recent-list"><p class="recent-meta">Loading…</p></div>
+
     {chart_emails_per_year}
     {chart_party_by_year}
     {chart_top_domains}
@@ -508,6 +699,97 @@ def generate_dashboard_html(stats, download_info):
     Created by <a href="mailto:dpwillis@umd.edu">Derek Willis</a>.
     Released under the <a href="https://github.com/dwillis/political-emails/blob/main/LICENSE">MIT License</a>.
   </footer>
+  <script>
+  (function() {{
+    var state = {{ party: "all", disclaimer: "any" }};
+    var listEl = document.getElementById("recent-list");
+    var countEl = document.getElementById("filter-count");
+
+    function escapeHtml(s) {{
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }}
+
+    function fmtTime(iso) {{
+      var d = new Date(iso);
+      if (isNaN(d)) return "";
+      var hh = String(d.getUTCHours()).padStart(2, "0");
+      var mm = String(d.getUTCMinutes()).padStart(2, "0");
+      return hh + ":" + mm + " UTC";
+    }}
+
+    function partyKey(p) {{
+      return p === "D" || p === "R" ? p : "unknown";
+    }}
+
+    function render(emails) {{
+      if (!emails.length) {{
+        listEl.innerHTML = '<p class="recent-empty">No emails in the last 24 hours.</p>';
+        countEl.textContent = "";
+        return;
+      }}
+      var html = emails.map(function(e) {{
+        var pk = partyKey(e.party);
+        var sender = e.name || e.email || "(unknown sender)";
+        var addr = e.email ? '<span class="addr">&lt;' + escapeHtml(e.email) + '&gt;</span>' : "";
+        var disc = e.disclaimer ? '<span class="disclaimer-tag">disclaimer</span>' : "";
+        var preview = e.preview ? '<div class="email-preview">' + escapeHtml(e.preview) + '</div>' : "";
+        return '<article class="email-card party-' + pk + '"' +
+               ' data-party="' + pk + '"' +
+               ' data-disclaimer="' + (e.disclaimer ? "yes" : "no") + '">' +
+          '<div class="email-meta">' +
+            '<span class="ts">' + escapeHtml(fmtTime(e.ts)) + '</span>' +
+            '<span class="sender">' + escapeHtml(sender) + '</span>' + addr +
+            '<span class="party-badge ' + pk + '">' + (pk === "unknown" ? "?" : pk) + '</span>' +
+            disc +
+          '</div>' +
+          '<div class="email-subject">' + escapeHtml(e.subject) + '</div>' +
+          preview +
+        '</article>';
+      }}).join("");
+      listEl.innerHTML = html;
+      applyFilters();
+    }}
+
+    function applyFilters() {{
+      var cards = listEl.querySelectorAll(".email-card");
+      var visible = 0;
+      cards.forEach(function(c) {{
+        var p = c.getAttribute("data-party");
+        var d = c.getAttribute("data-disclaimer");
+        var show = (state.party === "all" || state.party === p) &&
+                   (state.disclaimer === "any" ||
+                    (state.disclaimer === "yes" && d === "yes") ||
+                    (state.disclaimer === "no" && d === "no"));
+        c.classList.toggle("hidden", !show);
+        if (show) visible++;
+      }});
+      countEl.textContent = "Showing " + visible.toLocaleString() + " of " + cards.length.toLocaleString();
+    }}
+
+    document.querySelectorAll(".filter-chip").forEach(function(btn) {{
+      btn.addEventListener("click", function() {{
+        var filter = btn.getAttribute("data-filter");
+        var value = btn.getAttribute("data-value");
+        state[filter] = value;
+        document.querySelectorAll('.filter-chip[data-filter="' + filter + '"]').forEach(function(b) {{
+          b.classList.toggle("active", b === btn);
+        }});
+        applyFilters();
+      }});
+    }});
+
+    fetch("recent.json", {{ cache: "no-cache" }})
+      .then(function(r) {{ if (!r.ok) throw new Error(r.status); return r.json(); }})
+      .then(function(data) {{ render(data.emails || []); }})
+      .catch(function() {{
+        listEl.innerHTML = '<p class="recent-error">Could not load recent emails. ' +
+          'See <a href="downloads.html">downloads</a> for the full archive.</p>';
+        countEl.textContent = "";
+      }});
+  }})();
+  </script>
 </body>
 </html>"""
 
@@ -671,8 +953,11 @@ def main():
 
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
 
+    recent_summary = build_recent(hours=24)
+    print(f"  Recent emails (24h): {recent_summary['count']:,}")
+
     dash_path = DOCS_DIR / "index.html"
-    dash_path.write_text(generate_dashboard_html(stats, download_info))
+    dash_path.write_text(generate_dashboard_html(stats, download_info, recent_summary))
     print(f"  Wrote {dash_path}")
 
     dl_path = DOCS_DIR / "downloads.html"
