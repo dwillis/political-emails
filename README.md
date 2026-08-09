@@ -101,6 +101,25 @@ PNGs are written to `screenshots/<keyword>/<date>_<unique_id>.png` (git-ignored)
 
 Note: rendering loads remote images, so senders may register email "opens".
 
+### Topic Pages
+
+The site publishes a page per tracked keyword at `topic/<keyword>/` (e.g.
+`https://thescoop.org/political-emails/topic/datacenter/`) showing up to 3
+recent emails — with a campaign disclaimer — from the most recent day that has
+any, as a scrolling view of screenshots with each email's date, sender, and
+party. These are built once a day by the deploy workflow after the main site.
+
+To build them locally (needs the `screenshots` setup and Gmail credentials):
+
+```bash
+cd scripts
+uv run python build_topic_pages.py
+```
+
+Pages and their PNGs are written under `docs/topic/<keyword>/` (git-ignored).
+The build is resilient — a Gmail or render failure logs a warning and is
+skipped rather than failing the deploy.
+
 ## Data Format
 
 Each line in a JSONL file is a JSON record with these fields:

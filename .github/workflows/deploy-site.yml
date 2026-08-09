@@ -28,8 +28,23 @@ jobs:
         with:
           python-version: '3.12'
 
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
       - name: Build site
         run: python scripts/build_site.py
+
+      - name: Install screenshot dependencies
+        run: |
+          uv sync --group screenshots
+          uv run playwright install --with-deps chromium
+
+      - name: Build topic pages
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: uv run python scripts/build_topic_pages.py
 
       - uses: actions/configure-pages@v5
         with:

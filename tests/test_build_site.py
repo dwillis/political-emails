@@ -146,3 +146,47 @@ def test_compute_stats_keyword_matching_is_word_bounded(tmp_path, monkeypatch):
     stats = compute_stats(build_site.scan_data(), keyword_patterns=PATTERNS)
     assert "2026-03-01" not in stats["keyword_daily"]["datacenter"] or \
         stats["keyword_daily"]["datacenter"]["2026-03-01"] == {"D": 0, "R": 0, "unknown": 0}
+
+
+from build_site import generate_topic_html
+
+
+def _email(uid="u1", date="2026-08-05T09:30:00+00:00", name="Cool PAC",
+           email_addr="info@coolpac.org", party="D", subject="Data center news",
+           image="2026-08-05_u1.png"):
+    return {
+        "unique_id": uid, "date": date, "name": name, "email": email_addr,
+        "party": party, "subject": subject, "image": image,
+    }
+
+
+def test_generate_topic_html_includes_topic_and_metadata():
+    html = generate_topic_html(
+        "datacenter", "2026-08-05", [_email()], "2026-08-09T11:30:00Z"
+    )
+    assert html.startswith("<!DOCTYPE html>")
+    assert "datacenter" in html
+    assert "Cool PAC" in html
+    assert "info@coolpac.org" in html
+    assert "2026-08-05" in html
+
+
+def test_generate_topic_html_renders_image_per_email():
+    emails = [_email(uid="u1", image="a.png"), _email(uid="u2", image="b.png")]
+    html = generate_topic_html("datacenter", "2026-08-05", emails, "2026-08-09T11:30:00Z")
+    assert html.count("<img") == 2
+    assert 'src="a.png"' in html
+    assert 'src="b.png"' in html
+
+
+def test_generate_topic_html_shows_party_label():
+    html = generate_topic_html("datacenter", "2026-08-05", [_email(party="R")],
+                               "2026-08-09T11:30:00Z")
+    assert ">R<" in html
+
+
+def test_generate_topic_html_empty_state():
+    html = generate_topic_html("datacenter", None, [], "2026-08-09T11:30:00Z")
+    assert html.startswith("<!DOCTYPE html>")
+    assert "datacenter" in html
+    assert "<img" not in html

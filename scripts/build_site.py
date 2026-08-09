@@ -555,6 +555,19 @@ def generate_dashboard_html(stats, download_info, recent_summary):
 
     keyword_charts = build_keyword_charts(stats)
 
+    topics = sorted(load_tracked_keywords().keys())
+    if topics:
+        links = " · ".join(
+            f'<a href="topic/{t}/">{t}</a>' for t in topics
+        )
+        topics_nav = (
+            f'<h2>Topics</h2>\n'
+            f'<p class="topics-nav">Recent emails with a campaign disclaimer, '
+            f'by keyword: {links}</p>'
+        )
+    else:
+        topics_nav = ""
+
     # Compact downloads: current month + latest full year
     current_month_link = ""
     latest_year_link = ""
@@ -795,6 +808,8 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     {chart_top_domains}
     {keyword_charts}
 
+    {topics_nav}
+
     <h2>Downloads</h2>
     {current_month_link}
     {latest_year_link}
@@ -900,6 +915,117 @@ def generate_dashboard_html(stats, download_info, recent_summary):
 </html>"""
 
     return html
+
+
+def _party_label(party):
+    return {"D": "D", "R": "R"}.get(party, "Unknown")
+
+
+def generate_topic_html(topic, day, emails, generated_iso):
+    """Generate a topic page (docs/topic/<topic>/index.html).
+
+    Args:
+        topic: keyword slug (e.g. "datacenter").
+        day: "YYYY-MM-DD" the shown emails are from, or None when there are none.
+        emails: list of dicts with keys date, name, email, party, subject, image
+            (image is a PNG filename relative to the page).
+        generated_iso: build timestamp for the footer note.
+
+    Reuses the site chrome. Links back to the home page with "../../" since the
+    page lives two directories deep.
+    """
+    from html import escape
+
+    pretty = topic.replace("_", " ")
+
+    topic_css = """
+    .topic-intro { color: #555; margin-bottom: 1.5rem; }
+    .email-card {
+      background: white; border: 1px solid var(--border); border-radius: 6px;
+      margin-bottom: 1.5rem; overflow: hidden;
+    }
+    .email-head {
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1rem;
+      padding: 0.9rem 1.1rem; border-bottom: 1px solid var(--border);
+      background: #faf9f6;
+    }
+    .email-subject { font-weight: 700; color: var(--primary); flex: 1 1 100%; }
+    .email-meta { font-size: 0.85rem; color: #666; }
+    .party-badge {
+      display: inline-block; min-width: 1.4rem; text-align: center;
+      padding: 0.1rem 0.5rem; border-radius: 3px; font-size: 0.8rem;
+      font-weight: 700; color: white;
+    }
+    .email-shot {
+      max-height: 620px; overflow-y: auto; background: #f4f4f2;
+      text-align: center;
+    }
+    .email-shot img { width: 100%; max-width: 600px; display: block; margin: 0 auto; }
+    .topic-empty { color: #777; font-style: italic; }
+    """
+
+    cards = []
+    for e in emails:
+        color = PARTY_COLORS.get(e.get("party"), PARTY_COLORS["unknown"])
+        when = str(e.get("date", ""))[:16].replace("T", " ")
+        sender = e.get("name") or e.get("email") or "Unknown sender"
+        cards.append(f"""
+      <article class="email-card">
+        <div class="email-head">
+          <span class="email-subject">{escape(str(e.get("subject") or "(no subject)"))}</span>
+          <span class="email-meta">{escape(when)} UTC</span>
+          <span class="email-meta">{escape(str(sender))} &lt;{escape(str(e.get("email") or ""))}&gt;</span>
+          <span class="party-badge" style="background:{color}">{_party_label(e.get("party"))}</span>
+        </div>
+        <div class="email-shot">
+          <img src="{escape(str(e.get("image")))}" alt="Screenshot of email: {escape(str(e.get("subject") or ""))}" loading="lazy">
+        </div>
+      </article>""")
+
+    if emails:
+        intro = (
+            f'Up to 3 recent emails mentioning "{escape(pretty)}" with a campaign '
+            f'disclaimer, from {escape(str(day))}.'
+        )
+        body = "\n".join(cards)
+    else:
+        intro = f'No emails mentioning "{escape(pretty)}" with a campaign disclaimer yet.'
+        body = '<p class="topic-empty">Nothing to show yet — check back after the next daily update.</p>'
+
+    gen = escape(str(generated_iso)[:16].replace("T", " "))
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{escape(pretty)} emails — Political Email Archive</title>
+  <style>{SHARED_CSS}{topic_css}</style>
+  <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <h1>Political <span>Email</span> Archive</h1>
+    <p>Recent "{escape(pretty)}" emails.</p>
+    <div class="header-links">
+      <a href="../../">Home</a>
+      <a href="../../downloads.html">All Downloads</a>
+      <a href="https://github.com/dwillis/political-emails">GitHub</a>
+    </div>
+  </header>
+
+  <main>
+    <h2>"{escape(pretty)}" — recent emails</h2>
+    <p class="topic-intro">{intro}</p>
+    {body}
+  </main>
+
+  <footer>
+    Generated {gen} UTC. Created by <a href="mailto:dpwillis@umd.edu">Derek Willis</a>.
+    Released under the <a href="https://github.com/dwillis/political-emails/blob/main/LICENSE">MIT License</a>.
+  </footer>
+</body>
+</html>"""
 
 
 def generate_downloads_html(download_info):
