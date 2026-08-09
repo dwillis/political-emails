@@ -60,6 +60,23 @@ def test_select_targets_limit_zero_means_all():
     assert len(hits) == 3
 
 
+def test_select_targets_filters_by_disclaimer():
+    recs = _records()
+    recs[0]["disclaimer"] = True   # u1
+    recs[1]["disclaimer"] = False  # u2
+    recs[3]["disclaimer"] = True   # u4
+    hits = select_targets(recs, PATTERN, disclaimer=True)
+    assert [r["unique_id"] for r in hits] == ["u1", "u4"]
+
+
+def test_select_targets_disclaimer_false_does_not_filter():
+    recs = _records()
+    for r in recs:
+        r["disclaimer"] = False
+    hits = select_targets(recs, PATTERN, disclaimer=False)
+    assert [r["unique_id"] for r in hits] == ["u1", "u2", "u4"]
+
+
 def test_select_targets_skips_records_without_message_id():
     recs = _records()
     recs[0]["message_id"] = ""

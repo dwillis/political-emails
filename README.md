@@ -91,6 +91,7 @@ Options:
 - `--all-years` — do not restrict by year
 - `--since YYYY-MM-DD` / `--until YYYY-MM-DD` — inclusive date range (overrides `--year`)
 - `--party D|R` — filter by party
+- `--disclaimer` — only emails with a campaign disclaimer
 - `--limit N` — cap the number of emails (default 25; `0` means all)
 
 By default only the current year's emails are considered.

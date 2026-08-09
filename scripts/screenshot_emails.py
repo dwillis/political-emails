@@ -78,7 +78,8 @@ def _record_date(rec):
     return str(rec.get("date", ""))[:10]
 
 
-def select_targets(records, pattern, since=None, until=None, party=None, limit=DEFAULT_LIMIT):
+def select_targets(records, pattern, since=None, until=None, party=None,
+                   disclaimer=False, limit=DEFAULT_LIMIT):
     """Filter records to those worth screenshotting.
 
     Args:
@@ -86,6 +87,7 @@ def select_targets(records, pattern, since=None, until=None, party=None, limit=D
         pattern: compiled regex matched against subject + body.
         since, until: inclusive "YYYY-MM-DD" date bounds (optional).
         party: "D" / "R" filter (optional).
+        disclaimer: if True, keep only records with a campaign disclaimer.
         limit: max targets; 0 means unlimited.
 
     Returns a list of the matching records, in input order, capped at ``limit``.
@@ -96,6 +98,8 @@ def select_targets(records, pattern, since=None, until=None, party=None, limit=D
         if not rec.get("message_id"):
             continue
         if party and rec.get("party") != party:
+            continue
+        if disclaimer and not rec.get("disclaimer"):
             continue
         day = _record_date(rec)
         if since and day < since:
@@ -197,8 +201,8 @@ def screenshot_email(mail, rec, out_dir):
     return out_path
 
 
-def run(pattern, label, since=None, until=None, party=None, limit=DEFAULT_LIMIT,
-        folder='"[Gmail]/All Mail"'):
+def run(pattern, label, since=None, until=None, party=None, disclaimer=False,
+        limit=DEFAULT_LIMIT, folder='"[Gmail]/All Mail"'):
     """Select matching records, fetch each from Gmail, and render PNGs."""
     user = os.environ.get("GMAIL_USER")
     password = os.environ.get("GMAIL_APP_PASSWORD")
@@ -208,7 +212,8 @@ def run(pattern, label, since=None, until=None, party=None, limit=DEFAULT_LIMIT,
         sys.exit(1)
 
     targets = select_targets(
-        iter_records(), pattern, since=since, until=until, party=party, limit=limit
+        iter_records(), pattern, since=since, until=until, party=party,
+        disclaimer=disclaimer, limit=limit,
     )
     print(f"Selected {len(targets)} email(s) to screenshot", file=sys.stderr)
     if not targets:
@@ -244,6 +249,8 @@ def main():
     parser.add_argument("--since", help="Inclusive start date YYYY-MM-DD (overrides --year)")
     parser.add_argument("--until", help="Inclusive end date YYYY-MM-DD (overrides --year)")
     parser.add_argument("--party", choices=["D", "R"], help="Filter by party")
+    parser.add_argument("--disclaimer", action="store_true",
+                        help="Only emails with a campaign disclaimer")
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT,
                         help=f"Max emails (default {DEFAULT_LIMIT}; 0 = all)")
     parser.add_argument("--folder", default='"[Gmail]/All Mail"',
@@ -266,7 +273,7 @@ def main():
         all_years=args.all_years, current_year=date.today().year,
     )
     run(pattern, label, since=since, until=until, party=args.party,
-        limit=args.limit, folder=args.folder)
+        disclaimer=args.disclaimer, limit=args.limit, folder=args.folder)
 
 
 if __name__ == "__main__":
