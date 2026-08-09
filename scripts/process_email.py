@@ -166,44 +166,46 @@ def _make_html2text():
     return h
 
 
-def extract_body_content(message):
-    """Extract and clean body content from email message.
+def get_safe_charset(part_or_message):
+    """Best-effort charset for a message/part, normalized to a Python codec."""
+    charset = part_or_message.get_content_charset()
+    if not charset or charset.lower() in ['text/html', 'text/plain', 'html', 'plain']:
+        return 'utf-8'
+    charset = charset.lower()
+    return {
+        'iso-8859-1': 'latin-1',
+        'windows-1252': 'cp1252',
+        'us-ascii': 'ascii',
+    }.get(charset, charset)
 
-    Returns (body, clean_body) where:
-      - body: lightly cleaned text preserving paragraph structure
-      - clean_body: aggressively cleaned text (no markdown, no boilerplate)
+
+def safe_decode_payload(part_or_message):
+    """Decode a message/part payload to str, falling back across encodings."""
+    try:
+        payload = part_or_message.get_payload(decode=True)
+        if not payload:
+            return ""
+        charset = get_safe_charset(part_or_message)
+        try:
+            return payload.decode(charset, errors='ignore')
+        except (UnicodeDecodeError, LookupError):
+            for fb in ['utf-8', 'latin-1', 'cp1252', 'ascii']:
+                try:
+                    return payload.decode(fb, errors='ignore')
+                except (UnicodeDecodeError, LookupError):
+                    continue
+            return payload.decode('utf-8', errors='replace')
+    except Exception:
+        return ""
+
+
+def _extract_raw_parts(message):
+    """Return (plain_text_content, html_content) decoded from a message.
+
+    Concatenates all non-attachment text/plain and text/html parts.
     """
     plain_text_content = ""
     html_content = ""
-
-    def get_safe_charset(part_or_message):
-        charset = part_or_message.get_content_charset()
-        if not charset or charset.lower() in ['text/html', 'text/plain', 'html', 'plain']:
-            return 'utf-8'
-        charset = charset.lower()
-        return {
-            'iso-8859-1': 'latin-1',
-            'windows-1252': 'cp1252',
-            'us-ascii': 'ascii',
-        }.get(charset, charset)
-
-    def safe_decode_payload(part_or_message):
-        try:
-            payload = part_or_message.get_payload(decode=True)
-            if not payload:
-                return ""
-            charset = get_safe_charset(part_or_message)
-            try:
-                return payload.decode(charset, errors='ignore')
-            except (UnicodeDecodeError, LookupError):
-                for fb in ['utf-8', 'latin-1', 'cp1252', 'ascii']:
-                    try:
-                        return payload.decode(fb, errors='ignore')
-                    except (UnicodeDecodeError, LookupError):
-                        continue
-                return payload.decode('utf-8', errors='replace')
-        except Exception:
-            return ""
 
     if message.is_multipart():
         for part in message.walk():
@@ -234,6 +236,28 @@ def extract_body_content(message):
                 html_content = payload
         except Exception:
             return "", ""
+
+    return plain_text_content, html_content
+
+
+def extract_html(message):
+    """Return the raw HTML body of an email, or "" if it has no HTML part.
+
+    Used for faithful rendering/screenshotting — unlike extract_body_content,
+    this preserves markup rather than converting it to text.
+    """
+    _, html_content = _extract_raw_parts(message)
+    return html_content.strip()
+
+
+def extract_body_content(message):
+    """Extract and clean body content from email message.
+
+    Returns (body, clean_body) where:
+      - body: lightly cleaned text preserving paragraph structure
+      - clean_body: aggressively cleaned text (no markdown, no boilerplate)
+    """
+    plain_text_content, html_content = _extract_raw_parts(message)
 
     html_as_text = ""
     if html_content:

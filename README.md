@@ -59,6 +59,42 @@ cd scripts
 uv run python build_site.py
 ```
 
+The dashboard includes a per-day line chart of emails mentioning tracked
+keywords, split by party. Keywords and their match patterns live in
+[`config/tracked_keywords.json`](config/tracked_keywords.json) — add an entry to
+track another term.
+
+### Screenshot Emails
+
+Render faithful PNG screenshots of archived emails matching a keyword. Because
+the archive stores only cleaned text, this re-fetches the raw message from Gmail
+by `Message-ID`, so `GMAIL_USER` / `GMAIL_APP_PASSWORD` must be set.
+
+One-time setup (Playwright is an optional dependency group):
+
+```bash
+uv sync --group screenshots
+uv run playwright install chromium
+```
+
+Run it:
+
+```bash
+cd scripts
+uv run python screenshot_emails.py --keyword datacenter
+```
+
+Options:
+- `--keyword NAME` — a keyword from `config/tracked_keywords.json`
+- `--pattern REGEX` — an arbitrary case-insensitive regex instead of a keyword
+- `--since YYYY-MM-DD` / `--until YYYY-MM-DD` — inclusive date range
+- `--party D|R` — filter by party
+- `--limit N` — cap the number of emails (default 25; `0` means all)
+
+PNGs are written to `screenshots/<keyword>/<date>_<unique_id>.png` (git-ignored).
+
+Note: rendering loads remote images, so senders may register email "opens".
+
 ## Data Format
 
 Each line in a JSONL file is a JSON record with these fields:

@@ -11,6 +11,11 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+# Optional: only needed for scripts/screenshot_emails.py.
+# Install with `uv sync --group screenshots` then `uv run playwright install chromium`.
+screenshots = [
+    "playwright>=1.40",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["scripts"]

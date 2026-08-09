@@ -8,3 +8,7 @@ __pycache__/
 # as a GitHub Pages artifact. Not committed to avoid repo bloat
 # (yearly ZIP archives exceed GitHub's 100MB file limit).
 docs/
+
+# Email screenshots produced by screenshot_emails.py — large binaries,
+# regenerated on demand from the Gmail account.
+screenshots/
