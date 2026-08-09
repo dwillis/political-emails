@@ -7,13 +7,19 @@ Usage:
 
 import json
 import os
+import re
 import shutil
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from utils import DATA_DIR, count_records
-from charts import vertical_bar_chart, stacked_bar_chart, horizontal_bar_chart
+from utils import DATA_DIR, CONFIG_DIR, count_records
+from charts import (
+    vertical_bar_chart,
+    stacked_bar_chart,
+    horizontal_bar_chart,
+    line_chart,
+)
 
 DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
 DOWNLOADS_DIR = DOCS_DIR / "downloads"
@@ -204,30 +210,56 @@ def scan_data():
     return years
 
 
-def compute_stats(years):
+def load_tracked_keywords():
+    """Load tracked-keyword patterns from config/tracked_keywords.json.
+
+    Returns dict { keyword_slug: regex_pattern_string }. Missing file -> {}.
+    """
+    path = CONFIG_DIR / "tracked_keywords.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+
+def compute_stats(years, keyword_patterns=None):
     """Single-pass scan over JSONL files, return rich stats dict.
 
     years: output of scan_data().
+    keyword_patterns: dict { keyword_slug: regex_pattern_string }. Defaults to
+        config/tracked_keywords.json. Each email counts at most once per keyword
+        per day; matching is case-insensitive over subject + body.
 
     Returns dict with:
         total_records, disclaimer_count,
         party_counts: {"D", "R", "unknown"},
         unique_domains: int,
         by_year: { year: {total, D, R, unknown, disclaimer} },
-        top_domains: [(domain, count), ...]  sorted desc, top 10.
+        top_domains: [(domain, count), ...]  sorted desc, top 10,
+        keyword_daily: { keyword: { "YYYY-MM-DD": {"D", "R", "unknown"} } }.
     """
     from collections import Counter
+
+    if keyword_patterns is None:
+        keyword_patterns = load_tracked_keywords()
+    compiled = {
+        kw: re.compile(pat, re.IGNORECASE) for kw, pat in keyword_patterns.items()
+    }
 
     total_records = 0
     disclaimer_count = 0
     party_counts = {"D": 0, "R": 0, "unknown": 0}
     domain_counter = Counter()
     by_year = {}
+    keyword_daily = {kw: {} for kw in compiled}
+    all_dates = set()
 
     for year, months in years.items():
         year_stats = {"total": 0, "D": 0, "R": 0, "unknown": 0, "disclaimer": 0}
         for month_num, days in months.items():
             for d in days:
+                date_key = Path(d["path"]).stem  # "YYYY-MM-DD"
+                if d["records"]:
+                    all_dates.add(date_key)
                 with open(d["path"]) as f:
                     for line in f:
                         line = line.strip()
@@ -253,6 +285,17 @@ def compute_stats(years):
                         domain = rec.get("domain")
                         if domain:
                             domain_counter[domain] += 1
+
+                        if compiled:
+                            haystack = (
+                                f"{rec.get('subject', '')} {rec.get('body', '')}"
+                            )
+                            for kw, pattern in compiled.items():
+                                if pattern.search(haystack):
+                                    day_tally = keyword_daily[kw].setdefault(
+                                        date_key, {"D": 0, "R": 0, "unknown": 0}
+                                    )
+                                    day_tally[bucket] += 1
         if year_stats["total"] > 0:
             by_year[year] = year_stats
 
@@ -263,6 +306,8 @@ def compute_stats(years):
         "unique_domains": len(domain_counter),
         "by_year": by_year,
         "top_domains": domain_counter.most_common(10),
+        "keyword_daily": keyword_daily,
+        "all_dates": sorted(all_dates),
     }
 
 
@@ -418,6 +463,64 @@ def build_recent(hours=24):
     return summary
 
 
+KEYWORD_CHART_WINDOW_DAYS = 365
+
+
+def _keyword_title(keyword):
+    """Human-readable chart title for a keyword slug."""
+    pretty = keyword.replace("_", " ")
+    return f'"{pretty}" mentions per day, by party (last 12 months)'
+
+
+def _daily_span(all_dates, window_days):
+    """Continuous list of ISO dates for the trailing window of the archive.
+
+    Ends on the most recent date in ``all_dates`` and includes every calendar
+    day back to ``window_days`` earlier (or the archive's first day, whichever
+    is later). Returns [] when there are no dates.
+    """
+    if not all_dates:
+        return []
+    first = date.fromisoformat(all_dates[0])
+    end = date.fromisoformat(all_dates[-1])
+    start = max(first, end - timedelta(days=window_days - 1))
+    span = []
+    cursor = start
+    while cursor <= end:
+        span.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    return span
+
+
+def build_keyword_charts(stats, window_days=KEYWORD_CHART_WINDOW_DAYS):
+    """Build one inline-SVG line chart per tracked keyword.
+
+    Plots a continuous daily axis over the archive's trailing ``window_days``
+    (missing days count as zero), with one line per party. Returns a single HTML
+    string (possibly empty if there is no keyword data).
+    """
+    keyword_daily = stats.get("keyword_daily") or {}
+    archive_dates = stats.get("all_dates") or []
+    if not keyword_daily or not archive_dates:
+        return ""
+
+    span = _daily_span(archive_dates, window_days)
+
+    charts = []
+    for keyword, daily in keyword_daily.items():
+        series = {
+            party: [daily.get(d, {}).get(party, 0) for d in span]
+            for party in ("D", "R", "unknown")
+        }
+        # Skip a keyword that never matched anything.
+        if not any(any(vals) for vals in series.values()):
+            continue
+        charts.append(
+            line_chart(span, series, PARTY_COLORS, title=_keyword_title(keyword))
+        )
+    return "\n".join(charts)
+
+
 def generate_dashboard_html(stats, download_info, recent_summary):
     """Generate the dashboard home page (index.html)."""
     year_range = (
@@ -449,6 +552,8 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     chart_top_domains = horizontal_bar_chart(
         stats["top_domains"], title="Top 10 sender domains", color=ACCENT
     )
+
+    keyword_charts = build_keyword_charts(stats)
 
     # Compact downloads: current month + latest full year
     current_month_link = ""
@@ -688,6 +793,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     {chart_emails_per_year}
     {chart_party_by_year}
     {chart_top_domains}
+    {keyword_charts}
 
     <h2>Downloads</h2>
     {current_month_link}
@@ -955,6 +1061,16 @@ def main():
 
     recent_summary = build_recent(hours=24)
     print(f"  Recent emails (24h): {recent_summary['count']:,}")
+
+    keyword_daily = stats.get("keyword_daily") or {}
+    (DOCS_DIR / "keyword_daily.json").write_text(
+        json.dumps(keyword_daily, ensure_ascii=False)
+    )
+    kw_totals = {
+        kw: sum(v for day in daily.values() for v in day.values())
+        for kw, daily in keyword_daily.items()
+    }
+    print(f"  Keyword matches: {kw_totals}")
 
     dash_path = DOCS_DIR / "index.html"
     dash_path.write_text(generate_dashboard_html(stats, download_info, recent_summary))

@@ -193,6 +193,118 @@ def horizontal_bar_chart(data, title, color):
     return "".join(parts)
 
 
+# --- Line chart -----------------------------------------------------------
+
+def line_chart(dates, series, colors, title):
+    """Render a multi-series line chart as inline SVG.
+
+    Args:
+        dates: ordered list of x-axis labels (e.g. "YYYY-MM-DD" strings).
+        series: dict { series_label: [values aligned to dates] }.
+        colors: dict mapping series_label -> CSS color.
+        title: str — chart title.
+
+    Returns: SVG string. X-axis labels are drawn only at month boundaries
+    (the first date of each distinct YYYY-MM) to avoid crowding.
+    """
+    aria = f"{title}. " + ", ".join(
+        f"{label}: {_format_int(sum(vals))}" for label, vals in series.items()
+    )
+    parts = [_svg_open(aria)]
+
+    # Title
+    parts.append(
+        f'<text x="{_VB_WIDTH / 2}" y="24" text-anchor="middle" '
+        f'font-size="18" font-weight="700" fill="{_TITLE_DARK}" '
+        f'font-family="Libre Baskerville, Georgia, serif">{escape(title)}</text>'
+    )
+
+    # Legend (below title, above plot)
+    legend_y = 46
+    legend_x = _MARGIN_LEFT
+    for label in series:
+        parts.append(
+            f'<rect x="{legend_x}" y="{legend_y - 10}" width="12" height="12" '
+            f'fill="{colors.get(label, _AXIS_GRAY)}"/>'
+        )
+        parts.append(
+            f'<text x="{legend_x + 18}" y="{legend_y}" '
+            f'font-size="12" fill="{_LABEL_DARK}">{escape(str(label))}</text>'
+        )
+        legend_x += 18 + len(str(label)) * 8 + 24
+
+    if not dates or not series:
+        parts.append(
+            f'<text x="{_VB_WIDTH / 2}" y="{_VB_HEIGHT / 2}" '
+            f'text-anchor="middle" fill="{_AXIS_GRAY}">No data</text>'
+        )
+        parts.append("</svg>")
+        return "".join(parts)
+
+    plot_x = _MARGIN_LEFT
+    plot_y = _MARGIN_TOP + 30  # extra space for legend
+    plot_w = _VB_WIDTH - _MARGIN_LEFT - _MARGIN_RIGHT
+    plot_h = _VB_HEIGHT - plot_y - _MARGIN_BOTTOM
+
+    all_values = [v for vals in series.values() for v in vals]
+    max_val = _nice_max(max(all_values) if all_values else 1)
+
+    n = len(dates)
+    # X position for each date index. Single point sits at the left edge.
+    def x_at(i):
+        return plot_x if n == 1 else plot_x + plot_w * (i / (n - 1))
+
+    def y_at(val):
+        return plot_y + plot_h - plot_h * (val / max_val if max_val > 0 else 0)
+
+    # Gridlines + y-axis labels
+    for frac in (0, 0.25, 0.5, 0.75, 1.0):
+        y = plot_y + plot_h - plot_h * frac
+        parts.append(
+            f'<line x1="{plot_x}" y1="{y}" x2="{plot_x + plot_w}" y2="{y}" '
+            f'stroke="#eee" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{plot_x - 8}" y="{y + 4}" text-anchor="end" '
+            f'font-size="11" fill="{_AXIS_GRAY}">{_format_int(max_val * frac)}</text>'
+        )
+
+    # X-axis labels at month boundaries only (first occurrence of each YYYY-MM)
+    seen_months = set()
+    for i, d in enumerate(dates):
+        month_key = str(d)[:7]  # "YYYY-MM"
+        if month_key in seen_months:
+            continue
+        seen_months.add(month_key)
+        x = x_at(i)
+        parts.append(
+            f'<line x1="{x}" y1="{plot_y}" x2="{x}" y2="{plot_y + plot_h}" '
+            f'stroke="#f2f2f2" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{x}" y="{plot_y + plot_h + 18}" text-anchor="middle" '
+            f'font-size="11" fill="{_LABEL_DARK}">{escape(str(d))}</text>'
+        )
+
+    # One polyline per series
+    for label, vals in series.items():
+        color = colors.get(label, _AXIS_GRAY)
+        points = " ".join(f"{x_at(i)},{y_at(v)}" for i, v in enumerate(vals))
+        parts.append(
+            f'<polyline points="{points}" fill="none" '
+            f'stroke="{color}" stroke-width="2" '
+            f'stroke-linejoin="round" stroke-linecap="round"/>'
+        )
+        # Draw a marker when there is a single point (a lone polyline is invisible)
+        if len(vals) == 1:
+            parts.append(
+                f'<circle cx="{x_at(0)}" cy="{y_at(vals[0])}" r="3" fill="{color}"/>'
+            )
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 # --- Stacked bar chart ----------------------------------------------------
 
 def stacked_bar_chart(data, categories, colors, title):

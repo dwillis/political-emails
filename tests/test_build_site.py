@@ -57,3 +57,92 @@ def test_compute_stats_empty(tmp_path, monkeypatch):
     assert stats["unique_domains"] == 0
     assert stats["by_year"] == {}
     assert stats["top_domains"] == []
+
+
+PATTERNS = {"datacenter": r"\bdata[\s-]?centers?\b"}
+
+
+def test_daily_span_trailing_window_is_continuous():
+    import build_site
+    span = build_site._daily_span(
+        ["2020-01-01", "2026-06-01", "2026-06-30"], window_days=10
+    )
+    # 10-day window ending on the last date, one entry per calendar day.
+    assert span == [
+        "2026-06-21", "2026-06-22", "2026-06-23", "2026-06-24", "2026-06-25",
+        "2026-06-26", "2026-06-27", "2026-06-28", "2026-06-29", "2026-06-30",
+    ]
+
+
+def test_daily_span_shorter_than_window_uses_full_range():
+    import build_site
+    span = build_site._daily_span(["2026-06-28", "2026-06-30"], window_days=365)
+    assert span == ["2026-06-28", "2026-06-29", "2026-06-30"]
+
+
+def test_daily_span_empty():
+    import build_site
+    assert build_site._daily_span([], window_days=365) == []
+
+
+def test_compute_stats_keyword_daily_tallies_by_party(tmp_path, monkeypatch):
+    _write_jsonl(tmp_path / "2026" / "01" / "2026-01-15.jsonl", [
+        {"party": "D", "subject": "New data center approved", "body": ""},
+        {"party": "R", "subject": "hi", "body": "A datacenter is coming to town"},
+        {"party": "R", "subject": "unrelated", "body": "vote today"},
+        {"party": None, "subject": "data-centers everywhere", "body": ""},
+    ])
+    _write_jsonl(tmp_path / "2026" / "01" / "2026-01-16.jsonl", [
+        {"party": "D", "subject": "no match", "body": "the data is clear"},
+    ])
+
+    import build_site
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+
+    stats = compute_stats(build_site.scan_data(), keyword_patterns=PATTERNS)
+
+    daily = stats["keyword_daily"]["datacenter"]
+    assert daily["2026-01-15"] == {"D": 1, "R": 1, "unknown": 1}
+    # Day with no matches is absent (or zeroed); assert no false positives.
+    assert daily.get("2026-01-16", {"D": 0, "R": 0, "unknown": 0}) == {
+        "D": 0, "R": 0, "unknown": 0
+    }
+
+
+def test_compute_stats_reports_all_dates_sorted(tmp_path, monkeypatch):
+    _write_jsonl(tmp_path / "2026" / "01" / "2026-01-16.jsonl", [
+        {"party": "D", "subject": "x", "body": ""},
+    ])
+    _write_jsonl(tmp_path / "2026" / "01" / "2026-01-15.jsonl", [
+        {"party": "R", "subject": "y", "body": ""},
+    ])
+    import build_site
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+
+    stats = compute_stats(build_site.scan_data(), keyword_patterns=PATTERNS)
+    assert stats["all_dates"] == ["2026-01-15", "2026-01-16"]
+
+
+def test_compute_stats_keyword_counts_email_once_per_day(tmp_path, monkeypatch):
+    _write_jsonl(tmp_path / "2026" / "02" / "2026-02-01.jsonl", [
+        {"party": "D", "subject": "data center data center",
+         "body": "datacenter datacenter datacenter"},
+    ])
+    import build_site
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+
+    stats = compute_stats(build_site.scan_data(), keyword_patterns=PATTERNS)
+    assert stats["keyword_daily"]["datacenter"]["2026-02-01"]["D"] == 1
+
+
+def test_compute_stats_keyword_matching_is_word_bounded(tmp_path, monkeypatch):
+    _write_jsonl(tmp_path / "2026" / "03" / "2026-03-01.jsonl", [
+        {"party": "D", "subject": "predatacenterish", "body": ""},
+        {"party": "R", "subject": "", "body": "the datacentre in London"},  # British spelling: no match
+    ])
+    import build_site
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+
+    stats = compute_stats(build_site.scan_data(), keyword_patterns=PATTERNS)
+    assert "2026-03-01" not in stats["keyword_daily"]["datacenter"] or \
+        stats["keyword_daily"]["datacenter"]["2026-03-01"] == {"D": 0, "R": 0, "unknown": 0}

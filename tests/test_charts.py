@@ -149,3 +149,87 @@ def test_stacked_bar_chart_handles_empty_data():
     )
     assert svg.startswith("<svg")
     assert svg.endswith("</svg>")
+
+
+from charts import line_chart
+
+
+def _sample_line():
+    dates = ["2026-01-01", "2026-01-02", "2026-02-01"]
+    series = {
+        "D": [3, 5, 2],
+        "R": [1, 0, 4],
+        "unknown": [0, 1, 1],
+    }
+    colors = {"D": "#2b6cb0", "R": "#c53030", "unknown": "#a0aec0"}
+    return dates, series, colors
+
+
+def test_line_chart_contains_svg_root():
+    dates, series, colors = _sample_line()
+    svg = line_chart(dates, series, colors, title="Test")
+    assert svg.startswith("<svg")
+    assert svg.endswith("</svg>")
+    assert 'viewBox="0 0 800 400"' in svg
+
+
+def test_line_chart_includes_title():
+    dates, series, colors = _sample_line()
+    svg = line_chart(dates, series, colors, title="My Title")
+    assert ">My Title<" in svg
+
+
+def test_line_chart_has_accessibility_attrs():
+    dates, series, colors = _sample_line()
+    svg = line_chart(dates, series, colors, title="T")
+    assert 'role="img"' in svg
+    assert 'aria-label=' in svg
+
+
+def test_line_chart_draws_a_polyline_per_series():
+    dates, series, colors = _sample_line()
+    svg = line_chart(dates, series, colors, title="T")
+    # One polyline per non-empty series
+    assert svg.count("<polyline") == 3
+
+
+def test_line_chart_uses_series_colors():
+    dates, series, colors = _sample_line()
+    svg = line_chart(dates, series, colors, title="T")
+    assert "#2b6cb0" in svg
+    assert "#c53030" in svg
+    assert "#a0aec0" in svg
+
+
+def test_line_chart_has_legend_labels():
+    dates, series, colors = _sample_line()
+    svg = line_chart(dates, series, colors, title="T")
+    assert ">D<" in svg
+    assert ">R<" in svg
+
+
+def test_line_chart_labels_month_boundaries_only():
+    dates, series, colors = _sample_line()
+    svg = line_chart(dates, series, colors, title="T")
+    # First date of each month is labelled; mid-month dates are not.
+    assert ">2026-01-01<" in svg
+    assert ">2026-02-01<" in svg
+    assert ">2026-01-02<" not in svg
+
+
+def test_line_chart_handles_empty_data():
+    svg = line_chart([], {}, {}, title="Empty")
+    assert svg.startswith("<svg")
+    assert svg.endswith("</svg>")
+
+
+def test_line_chart_handles_single_point():
+    svg = line_chart(
+        ["2026-01-01"],
+        {"D": [5]},
+        {"D": "#2b6cb0"},
+        title="Single",
+    )
+    assert svg.startswith("<svg")
+    assert svg.endswith("</svg>")
+    # A single point still renders a marker/polyline without crashing
