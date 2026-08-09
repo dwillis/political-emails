@@ -87,9 +87,13 @@ uv run python screenshot_emails.py --keyword datacenter
 Options:
 - `--keyword NAME` — a keyword from `config/tracked_keywords.json`
 - `--pattern REGEX` — an arbitrary case-insensitive regex instead of a keyword
-- `--since YYYY-MM-DD` / `--until YYYY-MM-DD` — inclusive date range
+- `--year YYYY` — limit to a calendar year (defaults to the current year)
+- `--all-years` — do not restrict by year
+- `--since YYYY-MM-DD` / `--until YYYY-MM-DD` — inclusive date range (overrides `--year`)
 - `--party D|R` — filter by party
 - `--limit N` — cap the number of emails (default 25; `0` means all)
+
+By default only the current year's emails are considered.
 
 PNGs are written to `screenshots/<keyword>/<date>_<unique_id>.png` (git-ignored).
 

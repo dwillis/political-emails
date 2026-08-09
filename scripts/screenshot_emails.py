@@ -30,6 +30,7 @@ import json
 import os
 import re
 import sys
+from datetime import date
 from html import escape
 from pathlib import Path
 
@@ -55,6 +56,21 @@ def load_keyword_pattern(keyword):
             f"(have: {', '.join(patterns) or 'none'})"
         )
     return re.compile(patterns[keyword], re.IGNORECASE)
+
+
+def resolve_date_range(year=None, since=None, until=None, all_years=False, current_year=None):
+    """Resolve the effective (since, until) date bounds for target selection.
+
+    Precedence: explicit ``since``/``until`` win outright (each may stay open);
+    otherwise ``all_years`` clears both bounds; otherwise a specific ``year``
+    (or, by default, ``current_year``) bounds the range to that calendar year.
+    """
+    if since is not None or until is not None:
+        return since, until
+    if all_years:
+        return None, None
+    target = year if year is not None else current_year
+    return f"{target}-01-01", f"{target}-12-31"
 
 
 def _record_date(rec):
@@ -220,8 +236,13 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--keyword", help="Tracked keyword from config/tracked_keywords.json")
     group.add_argument("--pattern", help="Arbitrary regex to match (case-insensitive)")
-    parser.add_argument("--since", help="Inclusive start date YYYY-MM-DD")
-    parser.add_argument("--until", help="Inclusive end date YYYY-MM-DD")
+    year_group = parser.add_mutually_exclusive_group()
+    year_group.add_argument("--year", type=int,
+                            help="Limit to a calendar year (default: current year)")
+    year_group.add_argument("--all-years", action="store_true",
+                            help="Do not restrict by year")
+    parser.add_argument("--since", help="Inclusive start date YYYY-MM-DD (overrides --year)")
+    parser.add_argument("--until", help="Inclusive end date YYYY-MM-DD (overrides --year)")
     parser.add_argument("--party", choices=["D", "R"], help="Filter by party")
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT,
                         help=f"Max emails (default {DEFAULT_LIMIT}; 0 = all)")
@@ -240,7 +261,11 @@ def main():
         pattern = re.compile(args.pattern, re.IGNORECASE)
         label = "custom"
 
-    run(pattern, label, since=args.since, until=args.until, party=args.party,
+    since, until = resolve_date_range(
+        year=args.year, since=args.since, until=args.until,
+        all_years=args.all_years, current_year=date.today().year,
+    )
+    run(pattern, label, since=since, until=until, party=args.party,
         limit=args.limit, folder=args.folder)
 
 

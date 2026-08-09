@@ -67,6 +67,33 @@ def test_select_targets_skips_records_without_message_id():
     assert [r["unique_id"] for r in hits] == ["u2", "u4"]
 
 
+def test_resolve_date_range_defaults_to_current_year():
+    from screenshot_emails import resolve_date_range
+    assert resolve_date_range(current_year=2026) == ("2026-01-01", "2026-12-31")
+
+
+def test_resolve_date_range_specific_year():
+    from screenshot_emails import resolve_date_range
+    assert resolve_date_range(year=2024, current_year=2026) == ("2024-01-01", "2024-12-31")
+
+
+def test_resolve_date_range_all_years_disables_bounds():
+    from screenshot_emails import resolve_date_range
+    assert resolve_date_range(all_years=True, current_year=2026) == (None, None)
+
+
+def test_resolve_date_range_explicit_since_until_override():
+    from screenshot_emails import resolve_date_range
+    assert resolve_date_range(
+        since="2025-03-01", until="2025-04-01", current_year=2026
+    ) == ("2025-03-01", "2025-04-01")
+
+
+def test_resolve_date_range_explicit_since_only_leaves_until_open():
+    from screenshot_emails import resolve_date_range
+    assert resolve_date_range(since="2025-03-01", current_year=2026) == ("2025-03-01", None)
+
+
 def test_wrap_plaintext_escapes_and_wraps():
     html = wrap_plaintext("plain <b> & text\nsecond line")
     assert html.lstrip().lower().startswith("<!doctype html>")
