@@ -30,7 +30,7 @@ import json
 import os
 import re
 import sys
-from datetime import date
+from datetime import date, timedelta
 from html import escape
 from pathlib import Path
 
@@ -58,15 +58,20 @@ def load_keyword_pattern(keyword):
     return re.compile(patterns[keyword], re.IGNORECASE)
 
 
-def resolve_date_range(year=None, since=None, until=None, all_years=False, current_year=None):
+def resolve_date_range(year=None, since=None, until=None, all_years=False,
+                       past_day=False, current_year=None, today=None):
     """Resolve the effective (since, until) date bounds for target selection.
 
     Precedence: explicit ``since``/``until`` win outright (each may stay open);
-    otherwise ``all_years`` clears both bounds; otherwise a specific ``year``
-    (or, by default, ``current_year``) bounds the range to that calendar year.
+    then ``past_day`` (yesterday through ``today``); then ``all_years`` clears
+    both bounds; otherwise a specific ``year`` (or, by default, ``current_year``)
+    bounds the range to that calendar year.
     """
     if since is not None or until is not None:
         return since, until
+    if past_day:
+        yesterday = today - timedelta(days=1)
+        return yesterday.isoformat(), today.isoformat()
     if all_years:
         return None, None
     target = year if year is not None else current_year
@@ -215,9 +220,10 @@ def run(pattern, label, since=None, until=None, party=None, disclaimer=False,
         iter_records(), pattern, since=since, until=until, party=party,
         disclaimer=disclaimer, limit=limit,
     )
-    print(f"Selected {len(targets)} email(s) to screenshot", file=sys.stderr)
     if not targets:
+        print("No matching emails found; nothing to screenshot.", file=sys.stderr)
         return
+    print(f"Selected {len(targets)} email(s) to screenshot", file=sys.stderr)
 
     out_dir = SCREENSHOTS_DIR / label
     mail = connect_imap(user, password, folder)
@@ -246,6 +252,8 @@ def main():
                             help="Limit to a calendar year (default: current year)")
     year_group.add_argument("--all-years", action="store_true",
                             help="Do not restrict by year")
+    year_group.add_argument("--past-day", action="store_true",
+                            help="Only emails from the past day (yesterday and today)")
     parser.add_argument("--since", help="Inclusive start date YYYY-MM-DD (overrides --year)")
     parser.add_argument("--until", help="Inclusive end date YYYY-MM-DD (overrides --year)")
     parser.add_argument("--party", choices=["D", "R"], help="Filter by party")
@@ -268,9 +276,11 @@ def main():
         pattern = re.compile(args.pattern, re.IGNORECASE)
         label = "custom"
 
+    today = date.today()
     since, until = resolve_date_range(
         year=args.year, since=args.since, until=args.until,
-        all_years=args.all_years, current_year=date.today().year,
+        all_years=args.all_years, past_day=args.past_day,
+        current_year=today.year, today=today,
     )
     run(pattern, label, since=since, until=until, party=args.party,
         disclaimer=args.disclaimer, limit=args.limit, folder=args.folder)

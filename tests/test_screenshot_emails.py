@@ -111,6 +111,27 @@ def test_resolve_date_range_explicit_since_only_leaves_until_open():
     assert resolve_date_range(since="2025-03-01", current_year=2026) == ("2025-03-01", None)
 
 
+def test_resolve_date_range_past_day():
+    from datetime import date
+    from screenshot_emails import resolve_date_range
+    assert resolve_date_range(
+        past_day=True, today=date(2026, 8, 9)
+    ) == ("2026-08-08", "2026-08-09")
+
+
+def test_run_exits_gracefully_when_no_targets(monkeypatch):
+    import screenshot_emails as s
+    monkeypatch.setenv("GMAIL_USER", "u")
+    monkeypatch.setenv("GMAIL_APP_PASSWORD", "p")
+    monkeypatch.setattr(s, "iter_records", lambda: iter([]))
+
+    def _boom(*a, **k):
+        raise AssertionError("must not connect to IMAP when there are no targets")
+
+    monkeypatch.setattr(s, "connect_imap", _boom)
+    assert s.run(PATTERN, "datacenter") is None
+
+
 def test_wrap_plaintext_escapes_and_wraps():
     html = wrap_plaintext("plain <b> & text\nsecond line")
     assert html.lstrip().lower().startswith("<!doctype html>")

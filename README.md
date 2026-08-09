@@ -89,6 +89,7 @@ Options:
 - `--pattern REGEX` — an arbitrary case-insensitive regex instead of a keyword
 - `--year YYYY` — limit to a calendar year (defaults to the current year)
 - `--all-years` — do not restrict by year
+- `--past-day` — only emails from the past day (yesterday and today)
 - `--since YYYY-MM-DD` / `--until YYYY-MM-DD` — inclusive date range (overrides `--year`)
 - `--party D|R` — filter by party
 - `--disclaimer` — only emails with a campaign disclaimer
