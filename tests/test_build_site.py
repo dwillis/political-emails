@@ -179,6 +179,15 @@ def test_generate_topic_html_renders_image_per_email():
     assert 'src="b.png"' in html
 
 
+def test_generate_topic_html_intro_wording_and_long_date():
+    html = generate_topic_html(
+        "datacenter", "2026-08-08", [_email()], "2026-08-09T11:30:00Z"
+    )
+    assert 'Recent emails mentioning "datacenter" with a campaign disclaimer, ' \
+           'from August 8, 2026.' in html
+    assert "Up to 3" not in html
+
+
 def test_generate_topic_html_shows_party_label():
     html = generate_topic_html("datacenter", "2026-08-05", [_email(party="R")],
                                "2026-08-09T11:30:00Z")

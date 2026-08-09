@@ -921,6 +921,12 @@ def _party_label(party):
     return {"D": "D", "R": "R"}.get(party, "Unknown")
 
 
+def _format_long_date(day):
+    """Format a "YYYY-MM-DD" string as e.g. "August 8, 2026"."""
+    d = date.fromisoformat(day)
+    return f"{MONTH_NAMES[f'{d.month:02d}']} {d.day}, {d.year}"
+
+
 def generate_topic_html(topic, day, emails, generated_iso):
     """Generate a topic page (docs/topic/<topic>/index.html).
 
@@ -984,8 +990,8 @@ def generate_topic_html(topic, day, emails, generated_iso):
 
     if emails:
         intro = (
-            f'Up to 3 recent emails mentioning "{escape(pretty)}" with a campaign '
-            f'disclaimer, from {escape(str(day))}.'
+            f'Recent emails mentioning "{escape(pretty)}" with a campaign '
+            f'disclaimer, from {escape(_format_long_date(day))}.'
         )
         body = "\n".join(cards)
     else:
