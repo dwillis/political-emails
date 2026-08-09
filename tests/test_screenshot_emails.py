@@ -128,3 +128,53 @@ def test_render_html_to_png_writes_valid_png(tmp_path):
 
     assert out.exists()
     assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_render_survives_hanging_remote_resource(tmp_path):
+    """A tracking pixel / image whose host never responds must not stall the
+    render — real fundraising emails routinely reference such resources."""
+    pytest.importorskip("playwright.sync_api")
+    import socket
+    import threading
+    import time
+
+    from screenshot_emails import render_html_to_png
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+    port = srv.getsockname()[1]
+    conns = []
+
+    def _accept_and_hang():
+        while True:
+            try:
+                conn, _ = srv.accept()
+                conns.append(conn)  # keep open, never respond
+            except OSError:
+                break
+
+    threading.Thread(target=_accept_and_hang, daemon=True).start()
+
+    out = tmp_path / "hang.png"
+    html = (
+        f"<html><body style='width:600px'><h1>data center</h1>"
+        f"<img src='http://127.0.0.1:{port}/pixel.png' width='1' height='1'>"
+        f"</body></html>"
+    )
+    try:
+        start = time.monotonic()
+        render_html_to_png(html, out)
+        elapsed = time.monotonic() - start
+    except RuntimeError as e:
+        if "executable" in str(e).lower() or "install" in str(e).lower():
+            pytest.skip(f"Playwright browser unavailable: {e}")
+        raise  # a render timeout is a real failure, not a skip
+    finally:
+        srv.close()
+        for c in conns:
+            c.close()
+
+    assert out.exists()
+    assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert elapsed < 25  # must not fall back to the 30s networkidle timeout

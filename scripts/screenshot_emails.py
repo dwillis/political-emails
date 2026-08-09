@@ -39,6 +39,10 @@ from utils import CONFIG_DIR, DATA_DIR
 
 EMAIL_VIEWPORT_WIDTH = 600
 DEFAULT_LIMIT = 25
+# How long to let remote images settle before screenshotting anyway. Email
+# tracking pixels and slow image hosts often never let the network go idle, so
+# we give them a bounded window rather than waiting for full "networkidle".
+NETWORK_SETTLE_MS = 6000
 SCREENSHOTS_DIR = Path(__file__).resolve().parent.parent / "screenshots"
 
 
@@ -147,8 +151,15 @@ def render_html_to_png(html, out_path, width=EMAIL_VIEWPORT_WIDTH):
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page(viewport={"width": width, "height": 800})
-            # Remote images may register "opens"; the user accepts this trade-off.
-            page.set_content(html, wait_until="networkidle")
+            # Parse the DOM (fast), then give remote images a bounded window to
+            # load. Waiting for full "networkidle" hangs on tracking pixels and
+            # slow hosts, so settle failures are swallowed — we screenshot with
+            # whatever loaded. Remote images may register "opens"; accepted.
+            page.set_content(html, wait_until="domcontentloaded")
+            try:
+                page.wait_for_load_state("networkidle", timeout=NETWORK_SETTLE_MS)
+            except Exception:
+                pass
             page.screenshot(path=str(out_path), full_page=True)
             browser.close()
     except Exception as e:
