@@ -39,6 +39,7 @@ PRIMARY_LIGHT = "#2d6a3e"  # slightly lighter for header hover/variant
 ACCENT = "#e89b3c"         # warm amber
 ACCENT_LIGHT = "#f4c37d"   # pale amber
 PARTY_COLORS = {"D": "#2b6cb0", "R": "#c53030", "unknown": "#a0aec0"}
+KEYWORD_LINE_COLORS = {"Total": ACCENT, **PARTY_COLORS}
 
 
 SHARED_CSS = f"""
@@ -469,7 +470,7 @@ KEYWORD_CHART_WINDOW_DAYS = 365
 def _keyword_title(keyword):
     """Human-readable chart title for a keyword slug."""
     pretty = keyword.replace("_", " ")
-    return f'"{pretty}" mentions per day, by party (last 12 months)'
+    return f'"{pretty}" mentions per week, by party (last 12 months)'
 
 
 def _daily_span(all_dates, window_days):
@@ -492,31 +493,64 @@ def _daily_span(all_dates, window_days):
     return span
 
 
+def _weekly_buckets(span):
+    """Group a continuous daily span into weeks keyed by their Monday.
+
+    Returns a list of (week_start_iso, [iso_dates in that week]) in order.
+    The first and last buckets may be partial weeks.
+    """
+    weeks = []
+    for d in span:
+        day = date.fromisoformat(d)
+        week_start = (day - timedelta(days=day.weekday())).isoformat()
+        if not weeks or weeks[-1][0] != week_start:
+            weeks.append((week_start, []))
+        weeks[-1][1].append(d)
+    return weeks
+
+
 def build_keyword_charts(stats, window_days=KEYWORD_CHART_WINDOW_DAYS):
     """Build one inline-SVG line chart per tracked keyword.
 
-    Plots a continuous daily axis over the archive's trailing ``window_days``
-    (missing days count as zero), with one line per party. Returns a single HTML
-    string (possibly empty if there is no keyword data).
+    Aggregates daily counts into calendar weeks (Monday start) over the
+    archive's trailing ``window_days`` (missing days count as zero), with one
+    line per party plus a total line. Returns a single HTML string (possibly
+    empty if there is no keyword data).
     """
     keyword_daily = stats.get("keyword_daily") or {}
     archive_dates = stats.get("all_dates") or []
     if not keyword_daily or not archive_dates:
         return ""
 
-    span = _daily_span(archive_dates, window_days)
+    weeks = _weekly_buckets(_daily_span(archive_dates, window_days))
+    # Partial weeks at either edge under-count and read as sudden drops;
+    # plot complete weeks only (unless the archive has no complete week yet).
+    complete = [w for w in weeks if len(w[1]) == 7]
+    weeks = complete or weeks
+    week_starts = [w for w, _ in weeks]
 
     charts = []
     for keyword, daily in keyword_daily.items():
         series = {
-            party: [daily.get(d, {}).get(party, 0) for d in span]
+            party: [
+                sum(daily.get(d, {}).get(party, 0) for d in days)
+                for _, days in weeks
+            ]
             for party in ("D", "R", "unknown")
         }
         # Skip a keyword that never matched anything.
         if not any(any(vals) for vals in series.values()):
             continue
+        # Total first so the party lines draw on top of it.
+        totals = [sum(week_vals) for week_vals in zip(*series.values())]
+        series = {"Total": totals, **series}
         charts.append(
-            line_chart(span, series, PARTY_COLORS, title=_keyword_title(keyword))
+            line_chart(
+                week_starts,
+                series,
+                KEYWORD_LINE_COLORS,
+                title=_keyword_title(keyword),
+            )
         )
     return "\n".join(charts)
 

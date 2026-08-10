@@ -109,6 +109,69 @@ def test_compute_stats_keyword_daily_tallies_by_party(tmp_path, monkeypatch):
     }
 
 
+def test_build_keyword_charts_includes_total_line():
+    import build_site
+
+    stats = {
+        "keyword_daily": {
+            "datacenter": {
+                "2026-01-01": {"D": 2, "R": 1},
+                "2026-01-02": {"unknown": 3},
+            }
+        },
+        "all_dates": ["2026-01-01", "2026-01-02"],
+    }
+    html = build_site.build_keyword_charts(stats)
+    assert ">Total<" in html
+    # Total = D + R + unknown; 4 polylines (Total + three parties).
+    assert html.count("<polyline") == 4
+
+
+def test_build_keyword_charts_aggregates_by_week():
+    import build_site
+
+    # Two complete Mon-Sun weeks: Jan 5-11 and Jan 12-18, 2026.
+    # Weekly sums: D = 2+3 = 5, then 7.
+    stats = {
+        "keyword_daily": {
+            "datacenter": {
+                "2026-01-05": {"D": 2},
+                "2026-01-07": {"D": 3},
+                "2026-01-12": {"D": 7},
+            }
+        },
+        "all_dates": ["2026-01-05", "2026-01-18"],
+    }
+    html = build_site.build_keyword_charts(stats)
+    assert "per week" in html
+    # Two weekly points per series: each polyline has exactly two coordinates.
+    first_poly = html.split("<polyline")[1]
+    points = first_poly.split('points="')[1].split('"')[0]
+    assert len(points.split()) == 2
+
+
+def test_build_keyword_charts_drops_partial_edge_weeks():
+    import build_site
+
+    # Span Wed 2026-01-07 .. Tue 2026-01-20: partial leading week (Jan 7-11),
+    # one complete week (Jan 12-18), partial trailing week (Jan 19-20).
+    # Only the complete week is plotted, so no fake cliff at the edges.
+    stats = {
+        "keyword_daily": {
+            "datacenter": {
+                "2026-01-07": {"D": 9},
+                "2026-01-14": {"D": 4},
+                "2026-01-20": {"D": 9},
+            }
+        },
+        "all_dates": ["2026-01-07", "2026-01-20"],
+    }
+    html = build_site.build_keyword_charts(stats)
+    first_poly = html.split("<polyline")[1]
+    points = first_poly.split('points="')[1].split('"')[0]
+    assert len(points.split()) == 1
+
+
 def test_compute_stats_reports_all_dates_sorted(tmp_path, monkeypatch):
     _write_jsonl(tmp_path / "2026" / "01" / "2026-01-16.jsonl", [
         {"party": "D", "subject": "x", "body": ""},

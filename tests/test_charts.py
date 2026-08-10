@@ -211,10 +211,19 @@ def test_line_chart_has_legend_labels():
 def test_line_chart_labels_month_boundaries_only():
     dates, series, colors = _sample_line()
     svg = line_chart(dates, series, colors, title="T")
-    # First date of each month is labelled; mid-month dates are not.
-    assert ">2026-01-01<" in svg
-    assert ">2026-02-01<" in svg
+    # First date of each month gets a short month label; mid-month dates don't.
+    assert ">Jan 2026<" in svg
+    assert ">Feb<" in svg
     assert ">2026-01-02<" not in svg
+
+
+def test_line_chart_month_labels_show_year_on_first_and_january():
+    dates = ["2025-11-15", "2025-12-01", "2026-01-01"]
+    svg = line_chart(dates, {"D": [1, 2, 3]}, {"D": "#2b6cb0"}, title="T")
+    assert ">Nov 2025<" in svg  # first label carries the year
+    assert ">Dec<" in svg  # later months in the same year don't
+    assert ">Dec 2025<" not in svg
+    assert ">Jan 2026<" in svg  # January restates the year
 
 
 def test_line_chart_handles_empty_data():

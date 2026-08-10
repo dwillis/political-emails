@@ -35,6 +35,24 @@ def _format_int(n):
     return f"{int(n):,}"
 
 
+_MONTH_ABBR = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
+
+def _month_axis_label(date_str, with_year):
+    """Short month label for an ISO date ("Aug" / "Aug 2025").
+
+    Falls back to the raw string when it doesn't look like YYYY-MM-….
+    """
+    s = str(date_str)
+    if len(s) >= 7 and s[:4].isdigit() and s[5:7].isdigit() and 1 <= int(s[5:7]) <= 12:
+        month = _MONTH_ABBR[int(s[5:7]) - 1]
+        return f"{month} {s[:4]}" if with_year else month
+    return s
+
+
 def _svg_open(aria_label, width=_VB_WIDTH, height=_VB_HEIGHT):
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" '
@@ -269,12 +287,14 @@ def line_chart(dates, series, colors, title):
             f'font-size="11" fill="{_AXIS_GRAY}">{_format_int(max_val * frac)}</text>'
         )
 
-    # X-axis labels at month boundaries only (first occurrence of each YYYY-MM)
+    # X-axis labels at month boundaries only (first occurrence of each YYYY-MM),
+    # as short month names; the year appears on the first label and each January.
     seen_months = set()
     for i, d in enumerate(dates):
         month_key = str(d)[:7]  # "YYYY-MM"
         if month_key in seen_months:
             continue
+        with_year = not seen_months or str(d)[5:7] == "01"
         seen_months.add(month_key)
         x = x_at(i)
         parts.append(
@@ -283,7 +303,8 @@ def line_chart(dates, series, colors, title):
         )
         parts.append(
             f'<text x="{x}" y="{plot_y + plot_h + 18}" text-anchor="middle" '
-            f'font-size="11" fill="{_LABEL_DARK}">{escape(str(d))}</text>'
+            f'font-size="11" fill="{_LABEL_DARK}">'
+            f'{escape(_month_axis_label(d, with_year))}</text>'
         )
 
     # One polyline per series
