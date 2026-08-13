@@ -465,6 +465,7 @@ def process_single_email(message, domain_party_map):
     record['body'] = body
     record['clean_body'] = clean_body
     record['urls'] = urls
+    record['committee'] = None
 
     return record
 

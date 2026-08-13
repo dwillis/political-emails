@@ -12,3 +12,10 @@ docs/
 # Email screenshots produced by screenshot_emails.py — large binaries,
 # regenerated on demand from the Gmail account.
 screenshots/
+
+# Pre-computed committee export consumed by scripts/backfill_committees.py
+# (multi-GB, not committed).
+emails_updated_qwen35-4b.json
+
+# Local topic-modeling experiment (large binary model + labels).
+topic_model/

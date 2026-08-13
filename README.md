@@ -64,6 +64,43 @@ keywords, split by party. Keywords and their match patterns live in
 [`config/tracked_keywords.json`](config/tracked_keywords.json) — add an entry to
 track another term.
 
+### Committee Enrichment
+
+The `committee` field records which political committee sent each email. It is
+populated in two ways, both run **locally** (never in GitHub Actions):
+
+**One-time backfill** from a pre-computed export. `ijson` streams the multi-GB
+JSON array and its committee assignments are joined onto the archive by
+`(email, subject, date)`:
+
+```bash
+cd scripts
+uv run --with ijson python backfill_committees.py --dry-run   # preview stats
+uv run --with ijson python backfill_committees.py             # write changes
+```
+
+**Monthly top-up** for newly collected emails, using a local model via
+[Ollama](https://ollama.com). Scans records whose `committee` is still `null`
+and asks the model to identify the sender:
+
+```bash
+cd scripts
+uv run python enrich_committees.py --month 2026-02
+```
+
+Options:
+- `--month YYYY-MM` — month to process (default: previous calendar month)
+- `--since / --until YYYY-MM-DD` — explicit date range instead of `--month`
+- `--model` — Ollama model tag (default: `qwen3.5:4b`)
+- `--limit N` — cap model calls, useful for a smoke test
+- `--dry-run` — query the model but don't write files
+
+The prompt lives in [`config/committee_prompt.txt`](config/committee_prompt.txt)
+— edit it to change extraction behavior. Each day file is rewritten as it
+finishes, so an interrupted run resumes cleanly. Unknown results are stored as
+`null` (indistinguishable from "not yet processed"), so re-running a month will
+retry any records still unresolved.
+
 ### Screenshot Emails
 
 Render faithful PNG screenshots of archived emails matching a keyword. Because
@@ -143,6 +180,7 @@ Each line in a JSONL file is a JSON record with these fields:
 | `body` | string | Lightly cleaned email body |
 | `clean_body` | string | Aggressively cleaned body (no HTML, no boilerplate) |
 | `urls` | array | URLs found in the email body |
+| `committee` | string/null | Political committee that sent the email (LLM-extracted; `null` when unknown or not yet determined) |
 
 ## Automation
 
