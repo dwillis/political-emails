@@ -1,63 +1,43 @@
-"""Monthly committee enrichment using a local model via Ollama.
+"""Monthly committee enrichment using the DSPy IdentifyCommitteeModule.
 
-Scans daily JSONL files for records without a committee (null/missing) and asks
-a local Ollama model to identify the sending committee, writing the result back
-to the archive. Intended to be run manually each month against recently
-collected emails -- it is deliberately NOT wired into GitHub Actions.
+Scans daily JSONL files for records without a committee (null/missing) and runs
+each one through scripts/identify_committee.py, which first parses the
+"Paid for by ..." disclaimer deterministically and falls back to a local LLM
+(via DSPy + Ollama) only when that fails. Results are written back to the
+archive. Intended to be run manually each month -- deliberately NOT in GitHub
+Actions.
 
-    uv run python scripts/enrich_committees.py --month 2026-02
-    uv run python scripts/enrich_committees.py --since 2026-02-01 --until 2026-02-28
+    uv run --group enrich python scripts/enrich_committees.py --month 2026-02
+    uv run --group enrich python scripts/enrich_committees.py --since 2026-02-01 --until 2026-02-28
 
-Requires a running Ollama (https://ollama.com) with the target model pulled.
+Requires DSPy and a running Ollama (https://ollama.com) with the target model
+pulled (e.g. `ollama pull qwen3:4b`).
 
 Resumability: each day file is rewritten as soon as it finishes, so a crash
 loses at most the in-progress day, and re-running skips records already filled.
-Note: because unknown results are stored as null (same as "never processed"),
-re-runs will retry previously-unknown records -- acceptable for manual runs.
+Note: unknown results are stored as null (same as "never processed"), so
+re-running a month retries any records still unresolved.
 """
 
 import argparse
-import json
 import sys
-import urllib.error
-import urllib.request
 from datetime import date, timedelta
 from pathlib import Path
 
 from committee_utils import needs_committee, normalize_committee
 from utils import DATA_DIR, load_jsonl, save_jsonl
 
-DEFAULT_PROMPT_PATH = Path(__file__).resolve().parent.parent / "config" / "committee_prompt.txt"
-DEFAULT_MODEL = "qwen3.5:4b"
+DEFAULT_MODEL = "qwen3:4b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
 
-# --- Ollama request (isolated so swapping endpoint/params is a one-fn change) ---
+def configure_dspy(model, ollama_url):
+    """Point DSPy at a local Ollama model for the module's LLM fallback."""
+    import dspy
 
-def query_ollama(prompt, model, ollama_url):
-    """Send a single prompt to Ollama's /api/generate and return the raw text."""
-    payload = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode()
-    req = urllib.request.Request(
-        f"{ollama_url.rstrip('/')}/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req) as resp:
-        data = json.loads(resp.read())
-    return data.get("response", "")
+    lm = dspy.LM(f"ollama_chat/{model}", api_base=ollama_url)
+    dspy.configure(lm=lm)
 
-
-def parse_model_output(text):
-    """Extract a committee name from raw model output, or None if unknown."""
-    if not text:
-        return None
-    # Strip code fences and take the first non-empty line.
-    lines = [ln.strip().strip("`").strip('"').strip() for ln in text.splitlines()]
-    first = next((ln for ln in lines if ln), "")
-    return normalize_committee(first)
-
-
-# --- Day-file selection ---
 
 def day_files_for_range(start, end):
     """Yield daily JSONL paths whose YYYY-MM-DD stem falls within [start, end]."""
@@ -85,17 +65,10 @@ def resolve_range(args):
     return end.replace(day=1), end
 
 
-def build_prompt(template, record, body_chars):
-    """Fill the prompt template from a record, truncating the body."""
-    body = (record.get("clean_body") or record.get("body") or "")[:body_chars]
-    return template.format(
-        name=record.get("name", ""),
-        email=record.get("email", ""),
-        subject=record.get("subject", ""),
-        disclaimer_text=record.get("disclaimer_text", ""),
-        clean_body=(record.get("clean_body") or "")[:body_chars],
-        body=body,
-    )
+def is_connection_error(exc):
+    """True if the exception looks like Ollama being unreachable."""
+    text = str(exc).lower()
+    return any(s in text for s in ("connection", "connect", "refused", "max retries"))
 
 
 def main():
@@ -104,19 +77,21 @@ def main():
     group.add_argument("--month", help="YYYY-MM to process")
     group.add_argument("--since", help="YYYY-MM-DD start (inclusive)")
     group.add_argument("--until", help="YYYY-MM-DD end (inclusive)")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="Ollama model tag for the LLM fallback")
     parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
-    parser.add_argument("--prompt-file", type=Path, default=DEFAULT_PROMPT_PATH)
-    parser.add_argument("--body-chars", type=int, default=4000, help="Max body chars sent to the model")
-    parser.add_argument("--limit", type=int, default=None, help="Max model calls (for testing)")
-    parser.add_argument("--dry-run", action="store_true", help="Query but don't write files")
+    parser.add_argument("--limit", type=int, default=None, help="Max records to process (for testing)")
+    parser.add_argument("--dry-run", action="store_true", help="Identify but don't write files")
     args = parser.parse_args()
 
-    template = args.prompt_file.read_text()
-    start, end = resolve_range(args)
-    print(f"Enriching committees for {start} .. {end} using model '{args.model}'")
+    configure_dspy(args.model, args.ollama_url)
+    # Import after imports so a missing dspy fails inside configure_dspy above.
+    from identify_committee import IdentifyCommitteeModule
 
-    calls = 0
+    module = IdentifyCommitteeModule()
+    start, end = resolve_range(args)
+    print(f"Enriching committees for {start} .. {end} (LLM fallback: Ollama '{args.model}')")
+
+    processed = 0
     filled = 0
     unknown = 0
     errors = 0
@@ -129,21 +104,21 @@ def main():
 
         day_changed = False
         for rec in pending:
-            if args.limit is not None and calls >= args.limit:
+            if args.limit is not None and processed >= args.limit:
                 break
-            prompt = build_prompt(template, rec, args.body_chars)
             try:
-                raw = query_ollama(prompt, args.model, args.ollama_url)
-            except urllib.error.URLError as e:
-                sys.exit(f"Ollama request failed ({args.ollama_url}): {e}. Is Ollama running?")
-            except Exception as e:  # noqa: BLE001 - log and continue on per-record errors
-                print(f"  [error] {path.stem} {rec.get('email')}: {e}")
+                prediction = module(email_body=rec.get("body") or "")
+            except Exception as exc:  # noqa: BLE001
+                if processed == 0 or is_connection_error(exc):
+                    sys.exit(f"LLM call failed ({args.ollama_url}, model '{args.model}'): {exc}\n"
+                             "Is Ollama running and the model pulled?")
+                print(f"  [error] {path.stem} {rec.get('email')}: {exc}")
                 errors += 1
-                calls += 1
+                processed += 1
                 continue
 
-            calls += 1
-            committee = parse_model_output(raw)
+            processed += 1
+            committee = normalize_committee(prediction.committee)
             if committee is not None:
                 rec["committee"] = committee
                 filled += 1
@@ -153,16 +128,16 @@ def main():
 
         if day_changed and not args.dry_run:
             save_jsonl(path, records)
-        print(f"  {path.stem}: {len(pending)} pending, {calls} calls so far")
+        print(f"  {path.stem}: {len(pending)} pending, {processed} processed so far")
 
-        if args.limit is not None and calls >= args.limit:
+        if args.limit is not None and processed >= args.limit:
             print(f"Reached --limit {args.limit}; stopping.")
             break
 
     action = "would fill" if args.dry_run else "filled"
     print(
-        f"\nDone. {calls:,} model calls: {action} {filled:,} committees, "
-        f"{unknown:,} returned unknown, {errors:,} errors."
+        f"\nDone. Processed {processed:,} records: {action} {filled:,} committees, "
+        f"{unknown:,} unresolved (null), {errors:,} errors."
     )
 
 

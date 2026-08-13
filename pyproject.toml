@@ -16,6 +16,11 @@ dev = [
 screenshots = [
     "playwright>=1.40",
 ]
+# Optional: only needed for scripts/enrich_committees.py (monthly committee
+# enrichment). Run with `uv run --group enrich python scripts/enrich_committees.py`.
+enrich = [
+    "dspy>=2.5",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["scripts"]

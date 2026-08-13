@@ -79,27 +79,29 @@ uv run --with ijson python backfill_committees.py --dry-run   # preview stats
 uv run --with ijson python backfill_committees.py             # write changes
 ```
 
-**Monthly top-up** for newly collected emails, using a local model via
-[Ollama](https://ollama.com). Scans records whose `committee` is still `null`
-and asks the model to identify the sender:
+**Monthly top-up** for newly collected emails. Scans records whose `committee`
+is still `null` and runs each through
+[`scripts/identify_committee.py`](scripts/identify_committee.py), a DSPy module
+that first parses the "Paid for by ..." disclaimer deterministically and falls
+back to a local LLM (via [Ollama](https://ollama.com)) only when that fails:
 
 ```bash
-cd scripts
-uv run python enrich_committees.py --month 2026-02
+uv run --group enrich python scripts/enrich_committees.py --month 2026-02
 ```
 
 Options:
 - `--month YYYY-MM` — month to process (default: previous calendar month)
 - `--since / --until YYYY-MM-DD` — explicit date range instead of `--month`
-- `--model` — Ollama model tag (default: `qwen3.5:4b`)
-- `--limit N` — cap model calls, useful for a smoke test
-- `--dry-run` — query the model but don't write files
+- `--model` — Ollama model tag for the LLM fallback (default: `qwen3:4b`)
+- `--ollama-url` — Ollama base URL (default: `http://localhost:11434`)
+- `--limit N` — cap records processed, useful for a smoke test
+- `--dry-run` — identify committees but don't write files
 
-The prompt lives in [`config/committee_prompt.txt`](config/committee_prompt.txt)
-— edit it to change extraction behavior. Each day file is rewritten as it
-finishes, so an interrupted run resumes cleanly. Unknown results are stored as
-`null` (indistinguishable from "not yet processed"), so re-running a month will
-retry any records still unresolved.
+Requires the `enrich` dependency group (`uv sync --group enrich`) and a running
+Ollama with the model pulled (`ollama pull qwen3:4b`). Each day file is
+rewritten as it finishes, so an interrupted run resumes cleanly. Unknown results
+are stored as `null` (indistinguishable from "not yet processed"), so re-running
+a month retries any records still unresolved.
 
 ### Screenshot Emails
 
