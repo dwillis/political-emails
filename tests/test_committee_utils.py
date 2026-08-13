@@ -31,6 +31,35 @@ def test_normalize_committee_keeps_real_names_verbatim():
     )
 
 
+def test_normalize_committee_rejects_adapter_leakage():
+    assert normalize_committee("Dr. Kim Schrier for Congress [[ ## completed ##") is None
+    assert normalize_committee("### **Overview** of the bills...") is None
+
+
+def test_normalize_committee_rejects_rambling_essays():
+    essay = "Based on the text provided, here is a summary of the key information. " * 5
+    assert normalize_committee(essay) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "No committee name found in the email text",
+        "I cannot determine the committee",
+        "The committee is not specified in the email",
+        "Unable to identify the sponsoring committee",
+    ],
+)
+def test_normalize_committee_rejects_abstentions(value):
+    assert normalize_committee(value) is None
+
+
+def test_normalize_committee_keeps_names_with_innocuous_words():
+    # real names that must NOT trip the abstention filter
+    assert normalize_committee("No Labels") == "No Labels"
+    assert normalize_committee("Friends of Cory Booker") == "Friends of Cory Booker"
+
+
 def test_normalize_date_swaps_only_first_space():
     assert normalize_date("2026-01-18 18:14:58+00:00") == "2026-01-18T18:14:58+00:00"
     # already-ISO input is unchanged

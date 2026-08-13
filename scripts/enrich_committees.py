@@ -21,21 +21,30 @@ re-running a month retries any records still unresolved.
 
 import argparse
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
-from pathlib import Path
 
 from committee_utils import needs_committee, normalize_committee
 from utils import DATA_DIR, load_jsonl, save_jsonl
 
-DEFAULT_MODEL = "qwen3.5:4b-mlx"
+DEFAULT_MODEL = "qwen3:4b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
 
-def configure_dspy(model, ollama_url):
-    """Point DSPy at a local Ollama model for the module's LLM fallback."""
+def configure_dspy(model, ollama_url, disable_thinking=True):
+    """Point DSPy at a local Ollama model for the module's LLM fallback.
+
+    Reasoning ("thinking") models are ~200x slower here and mangle the
+    structured output, so thinking is disabled by default. This requires a
+    thinking-capable model (e.g. qwen3:4b); pass disable_thinking=False for a
+    plain instruct model that doesn't accept Ollama's `think` parameter.
+    """
     import dspy
 
-    lm = dspy.LM(f"ollama_chat/{model}", api_base=ollama_url)
+    kwargs = {"api_base": ollama_url}
+    if disable_thinking:
+        kwargs["think"] = False
+    lm = dspy.LM(f"ollama_chat/{model}", **kwargs)
     dspy.configure(lm=lm)
 
 
@@ -71,6 +80,16 @@ def is_connection_error(exc):
     return any(s in text for s in ("connection", "connect", "refused", "max retries"))
 
 
+def identify(module, rec):
+    """Run one record through the module; return a normalized committee or None.
+
+    Safe to call concurrently: DSPy's own Evaluate/optimizers share a single
+    module across a thread pool the same way.
+    """
+    prediction = module(email_body=rec.get("body") or "")
+    return normalize_committee(prediction.committee)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_argument_group("date range (default: previous month)")
@@ -80,10 +99,12 @@ def main():
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Ollama model tag for the LLM fallback")
     parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     parser.add_argument("--limit", type=int, default=None, help="Max records to process (for testing)")
+    parser.add_argument("--workers", type=int, default=1, help="Concurrent LLM workers per day (needs OLLAMA_NUM_PARALLEL>1 to help)")
+    parser.add_argument("--allow-thinking", action="store_true", help="Don't disable model reasoning (needed for non-thinking instruct models)")
     parser.add_argument("--dry-run", action="store_true", help="Identify but don't write files")
     args = parser.parse_args()
 
-    configure_dspy(args.model, args.ollama_url)
+    configure_dspy(args.model, args.ollama_url, disable_thinking=not args.allow_thinking)
     # Import after imports so a missing dspy fails inside configure_dspy above.
     from identify_committee import IdentifyCommitteeModule
 
@@ -102,29 +123,52 @@ def main():
         if not pending:
             continue
 
-        day_changed = False
-        for rec in pending:
-            if args.limit is not None and processed >= args.limit:
+        # Respect the global --limit by trimming this day's batch up front.
+        if args.limit is not None:
+            remaining = args.limit - processed
+            if remaining <= 0:
                 break
-            try:
-                prediction = module(email_body=rec.get("body") or "")
-            except Exception as exc:  # noqa: BLE001
-                if processed == 0 or is_connection_error(exc):
+            pending = pending[:remaining]
+
+        day_changed = False
+
+        def handle(rec, exc=None, committee=None):
+            """Fold one record's outcome into the running counters."""
+            nonlocal processed, filled, unknown, errors, day_changed
+            processed += 1
+            if exc is not None:
+                if is_connection_error(exc):
                     sys.exit(f"LLM call failed ({args.ollama_url}, model '{args.model}'): {exc}\n"
                              "Is Ollama running and the model pulled?")
                 print(f"  [error] {path.stem} {rec.get('email')}: {exc}")
                 errors += 1
-                processed += 1
-                continue
-
-            processed += 1
-            committee = normalize_committee(prediction.committee)
+                return
             if committee is not None:
                 rec["committee"] = committee
                 filled += 1
                 day_changed = True
             else:
                 unknown += 1
+
+        if args.workers > 1:
+            with ThreadPoolExecutor(max_workers=args.workers) as pool:
+                futures = {pool.submit(identify, module, rec): rec for rec in pending}
+                for future in as_completed(futures):
+                    rec = futures[future]
+                    try:
+                        handle(rec, committee=future.result())
+                    except SystemExit:
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        handle(rec, exc=exc)
+        else:
+            for rec in pending:
+                try:
+                    handle(rec, committee=identify(module, rec))
+                except SystemExit:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    handle(rec, exc=exc)
 
         if day_changed and not args.dry_run:
             save_jsonl(path, records)

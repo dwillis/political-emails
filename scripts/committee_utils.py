@@ -10,16 +10,40 @@ from utils import DATA_DIR
 # Compared case-insensitively against the stripped value.
 UNKNOWN_VALUES = {"", "unknown", "none", "n/a", "null"}
 
+# A real committee name is short. Anything longer is a model that rambled
+# (multi-paragraph "here is a summary..." essays) rather than answering.
+MAX_COMMITTEE_LEN = 150
+
+# Substrings that mark a natural-language non-answer ("No committee name found
+# in the email text", "I cannot determine...") rather than a committee. These
+# never appear in a real committee name, so a substring match is safe.
+ABSTENTION_MARKERS = (
+    "no committee", "not found", "cannot determine", "cannot be determined",
+    "unable to", "not able to", "could not", "couldn't", "not present",
+    "not specified", "not mentioned", "not explicitly", "no political",
+    "no clear", "i cannot", "there is no", "not identified",
+)
+
 
 def normalize_committee(value):
-    """Return a clean committee name, or None for unknown/empty values.
+    """Return a clean committee name, or None for unknown/empty/garbage values.
 
-    Names are written verbatim (stripped only); no other normalization.
+    Real names are written verbatim (stripped only). Values are rejected to None
+    when they are unknown/empty, absurdly long (a rambling model response),
+    contain DSPy ChatAdapter field markers ("[[", "##") that leak from
+    misbehaving models, or read as a natural-language "I can't tell" non-answer.
     """
     if value is None:
         return None
     stripped = str(value).strip()
     if stripped.lower() in UNKNOWN_VALUES:
+        return None
+    if len(stripped) > MAX_COMMITTEE_LEN:
+        return None
+    if "[[" in stripped or "##" in stripped:
+        return None
+    low = stripped.lower()
+    if any(marker in low for marker in ABSTENTION_MARKERS):
         return None
     return stripped
 

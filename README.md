@@ -94,7 +94,9 @@ Options:
 - `--since / --until YYYY-MM-DD` — explicit date range instead of `--month`
 - `--model` — Ollama model tag for the LLM fallback (default: `qwen3:4b`)
 - `--ollama-url` — Ollama base URL (default: `http://localhost:11434`)
+- `--workers N` — concurrent LLM workers per day (also set `OLLAMA_NUM_PARALLEL`)
 - `--limit N` — cap records processed, useful for a smoke test
+- `--allow-thinking` — keep model reasoning on (for non-thinking instruct models)
 - `--dry-run` — identify committees but don't write files
 
 Requires the `enrich` dependency group (`uv sync --group enrich`) and a running
@@ -102,6 +104,22 @@ Ollama with the model pulled (`ollama pull qwen3:4b`). Each day file is
 rewritten as it finishes, so an interrupted run resumes cleanly. Unknown results
 are stored as `null` (indistinguishable from "not yet processed"), so re-running
 a month retries any records still unresolved.
+
+**Model choice matters a lot.** Only ~25% of records reach the LLM fallback, but
+those calls dominate runtime. Use a *thinking-capable* model (default `qwen3:4b`);
+the script disables reasoning via Ollama's `think: false`, which cuts a call from
+minutes to well under a second. A reasoning model left in "thinking" mode is
+~200x slower and tends to emit rambling non-answers. Avoid community MLX
+conversions that ignore the thinking toggle.
+
+To scrub garbage committee values (rambling model essays, adapter-marker
+leakage) that predate the stricter `normalize_committee`, run the cleanup — it
+re-normalizes every record and nulls rejects so they can be re-enriched:
+
+```bash
+uv run python scripts/clean_committees.py --dry-run   # preview
+uv run python scripts/clean_committees.py             # apply
+```
 
 ### Screenshot Emails
 
