@@ -121,6 +121,57 @@ uv run python scripts/clean_committees.py --dry-run   # preview
 uv run python scripts/clean_committees.py             # apply
 ```
 
+### Committee provenance & validation
+
+Every record carries `committee_source` recording how its committee was derived:
+
+| value | meaning |
+|-------|---------|
+| `disclaimer` | parsed from the email's "Paid for by ..." text (authoritative) |
+| `llm:<model>` | produced by the LLM fallback during enrichment |
+| `backfill` | pre-existing label whose disclaimer doesn't confirm it |
+| `null` | committee is null (not determined) |
+
+The deterministic extractor lives in
+[`scripts/committee_extract.py`](scripts/committee_extract.py) (pure, no deps).
+Because a disclaimer names the committee by law, when one is present the
+committee comes from the disclaimer text *only* — never the sender's name.
+
+**Measuring accuracy** against the 1,000-row hand-labeled gold set
+([LLM-Extraction-Challenge](https://github.com/dwillis/LLM-Extraction-Challenge)):
+
+```bash
+uv run python scripts/eval_committees.py                          # stored + regex
+uv run --group enrich python scripts/eval_committees.py --model qwen3:4b
+```
+
+**One-time data sweep** — adds `committee_source`, recovers committees from
+missed disclaimers, nulls garbage (idempotent; run the dry-run first):
+
+```bash
+uv run python scripts/apply_committee_fixes.py --dry-run
+uv run python scripts/apply_committee_fixes.py
+```
+
+**FEC cross-reference** — matches committee names to the FEC committee master
+(a confidence signal; only *exact* matches are trusted, fuzzy are review hints):
+
+```bash
+uv run python scripts/fec_match.py            # writes state/fec/fec_matches.csv
+```
+
+**Validation report** — tiers every labeled record and builds a review queue:
+
+```bash
+uv run python scripts/validate_committees.py  # state/validation/{report.md,review_queue.csv}
+```
+
+Tiers: **CONFIRMED** (disclaimer-sourced or exact FEC match) · **CONSISTENT**
+(matches the dominant committee on a candidate-owned domain) · **SUSPECT**
+(review queue — the sharpest signal is *contradicts-disclaimer*: the stored
+label disagrees with what the "Paid for by" text says) · **UNVERIFIED** (labeled
+but unconfirmable — an honest "don't know", not an error claim).
+
 ### Screenshot Emails
 
 Render faithful PNG screenshots of archived emails matching a keyword. Because
@@ -201,6 +252,7 @@ Each line in a JSONL file is a JSON record with these fields:
 | `clean_body` | string | Aggressively cleaned body (no HTML, no boilerplate) |
 | `urls` | array | URLs found in the email body |
 | `committee` | string/null | Political committee that sent the email (LLM-extracted; `null` when unknown or not yet determined) |
+| `committee_source` | string/null | How `committee` was derived: `disclaimer`, `llm:<model>`, `backfill`, or `null` |
 
 ## Automation
 

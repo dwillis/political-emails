@@ -8,9 +8,11 @@ from committee_utils import (
     build_committee_map,
     join_key,
     needs_committee,
+    norm_label,
     normalize_committee,
     normalize_date,
     record_key,
+    same_committee,
 )
 from process_email import process_single_email
 
@@ -58,6 +60,46 @@ def test_normalize_committee_keeps_names_with_innocuous_words():
     # real names that must NOT trip the abstention filter
     assert normalize_committee("No Labels") == "No Labels"
     assert normalize_committee("Friends of Cory Booker") == "Friends of Cory Booker"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "info@voteractionproject.org",
+        "https://donate.example.com",
+        "visit www.example.org to give",
+        "12345",
+        "one two three four five six seven eight nine ten eleven twelve thirteen",
+    ],
+)
+def test_normalize_committee_rejects_structural_garbage(value):
+    assert normalize_committee(value) is None
+
+
+def test_norm_label():
+    assert norm_label("The Collective PAC") == "collective pac"
+    assert norm_label("D.S.C.C.") == "d s c c"
+    assert norm_label("  Trump National Committee JFC, Inc.  ") == (
+        "trump national committee jfc inc"
+    )
+    assert norm_label(None) == ""
+
+
+def test_same_committee_variants():
+    # acronym either direction
+    assert same_committee("DSCC", "Democratic Senatorial Campaign Committee")
+    assert same_committee("Voter Protection Project", "VPP")
+    # subset / truncation
+    assert same_committee("Never Surrender, Inc.", "Never Surrender")
+    assert same_committee("Warnock for Georgia", "Warnock for Georgia 2024")
+    # high token overlap
+    assert same_committee("Jimmy Panetta for Congress", "Jimmy Panetta for Congress 2024")
+
+
+def test_same_committee_genuinely_different():
+    assert not same_committee("Hakeem Jeffries for Congress", "Lisa Blunt Rochester for Senate")
+    assert not same_committee("TULSI 2020", "Tulsi Now")
+    assert not same_committee("Rob Bresnahan for Congress", "Rob for PA")
 
 
 def test_normalize_date_swaps_only_first_space():
@@ -138,3 +180,4 @@ def test_process_single_email_includes_committee_none():
     record = process_single_email(msg, domain_party_map={})
     assert "committee" in record
     assert record["committee"] is None
+    assert record["committee_source"] is None

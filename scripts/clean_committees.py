@@ -35,6 +35,9 @@ def main():
                 if len(examples) < 15:
                     examples.append(current[:70])
                 rec["committee"] = cleaned
+                if cleaned is None and "committee_source" in rec:
+                    # keep invariant: source is null iff committee is null
+                    rec["committee_source"] = None
                 nulled += 1
                 changed = True
         if changed:

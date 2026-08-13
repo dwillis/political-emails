@@ -4,6 +4,8 @@ Pure functions only (no ijson / Ollama / network imports) so they can be unit
 tested without the 4 GB qwen file or a running Ollama instance.
 """
 
+import re
+
 from utils import DATA_DIR
 
 # Values the model emits that we treat as "no committee determined" -> None.
@@ -45,7 +47,61 @@ def normalize_committee(value):
     low = stripped.lower()
     if any(marker in low for marker in ABSTENTION_MARKERS):
         return None
+    # Structural garbage: email addresses, URLs, over-long word counts, or
+    # values with no letters are never real committee names.
+    if "@" in stripped:
+        return None
+    if re.search(r"https?://|\bwww\.", low):
+        return None
+    if len(stripped.split()) > 12:
+        return None
+    if not re.search(r"[A-Za-z]", stripped):
+        return None
     return stripped
+
+
+def norm_label(value):
+    """Aggressively normalize a committee name for equality comparison.
+
+    Casefold, replace punctuation with spaces, collapse whitespace, drop a
+    leading "the". Used to compare labels across sources (stored vs extracted vs
+    FEC) without being fooled by casing/punctuation ("DSCC" vs "D.S.C.C.",
+    "The Collective PAC" vs "Collective PAC"). Not for storage -- use
+    normalize_committee() for that.
+    """
+    if value is None:
+        return ""
+    s = re.sub(r"[^\w\s]", " ", str(value).casefold())
+    s = re.sub(r"\s+", " ", s).strip()
+    if s.startswith("the "):
+        s = s[4:]
+    return s
+
+
+def _acronym(norm):
+    return "".join(w[0] for w in norm.split() if w)
+
+
+def same_committee(a, b):
+    """True if two names plausibly refer to the SAME committee.
+
+    Recognizes the common variant relationships so they are not mistaken for a
+    contradiction: identical after norm_label, one a subset of the other's words
+    ("DSCC" full name vs truncated), an acronym either direction ("DSCC" vs
+    "Democratic Senatorial Campaign Committee", "VPP" vs "Voter Protection
+    Project"), or >=50% token (Jaccard) overlap.
+    """
+    na, nb = norm_label(a), norm_label(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    ta, tb = set(na.split()), set(nb.split())
+    if ta <= tb or tb <= ta:
+        return True
+    if na.replace(" ", "") == _acronym(nb) or nb.replace(" ", "") == _acronym(na):
+        return True
+    return len(ta & tb) / len(ta | tb) >= 0.5
 
 
 def normalize_date(date_str):

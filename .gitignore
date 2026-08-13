@@ -19,3 +19,8 @@ emails_updated_qwen35-4b.json
 
 # Local topic-modeling experiment (large binary model + labels).
 topic_model/
+
+# Committee validation working data: gold set, FEC bulk cache, reports/queues.
+state/gold/
+state/fec/
+state/validation/

@@ -81,13 +81,14 @@ def is_connection_error(exc):
 
 
 def identify(module, rec):
-    """Run one record through the module; return a normalized committee or None.
+    """Run one record through the module. Returns (committee_or_None, source).
 
+    source is "disclaimer" when the deterministic parse answered, else "llm".
     Safe to call concurrently: DSPy's own Evaluate/optimizers share a single
     module across a thread pool the same way.
     """
     prediction = module(email_body=rec.get("body") or "")
-    return normalize_committee(prediction.committee)
+    return normalize_committee(prediction.committee), getattr(prediction, "source", "llm")
 
 
 def main():
@@ -132,8 +133,11 @@ def main():
 
         day_changed = False
 
-        def handle(rec, exc=None, committee=None):
-            """Fold one record's outcome into the running counters."""
+        def handle(rec, exc=None, result=None):
+            """Fold one record's outcome into the running counters.
+
+            result is the (committee_or_None, source) tuple from identify().
+            """
             nonlocal processed, filled, unknown, errors, day_changed
             processed += 1
             if exc is not None:
@@ -143,8 +147,12 @@ def main():
                 print(f"  [error] {path.stem} {rec.get('email')}: {exc}")
                 errors += 1
                 return
+            committee, source = result
             if committee is not None:
                 rec["committee"] = committee
+                rec["committee_source"] = (
+                    "disclaimer" if source == "disclaimer" else f"llm:{args.model}"
+                )
                 filled += 1
                 day_changed = True
             else:
@@ -156,7 +164,7 @@ def main():
                 for future in as_completed(futures):
                     rec = futures[future]
                     try:
-                        handle(rec, committee=future.result())
+                        handle(rec, result=future.result())
                     except SystemExit:
                         raise
                     except Exception as exc:  # noqa: BLE001
@@ -164,7 +172,7 @@ def main():
         else:
             for rec in pending:
                 try:
-                    handle(rec, committee=identify(module, rec))
+                    handle(rec, result=identify(module, rec))
                 except SystemExit:
                     raise
                 except Exception as exc:  # noqa: BLE001
