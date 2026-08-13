@@ -127,6 +127,7 @@ Every record carries `committee_source` recording how its committee was derived:
 
 | value | meaning |
 |-------|---------|
+| `human` | set by a person during review (most authoritative) |
 | `disclaimer` | parsed from the email's "Paid for by ..." text (authoritative) |
 | `llm:<model>` | produced by the LLM fallback during enrichment |
 | `backfill` | pre-existing label whose disclaimer doesn't confirm it |
@@ -171,6 +172,19 @@ Tiers: **CONFIRMED** (disclaimer-sourced or exact FEC match) · **CONSISTENT**
 (review queue — the sharpest signal is *contradicts-disclaimer*: the stored
 label disagrees with what the "Paid for by" text says) · **UNVERIFIED** (labeled
 but unconfirmable — an honest "don't know", not an error claim).
+
+**Reviewing SUSPECT records** — generate a self-contained HTML page (no server;
+open it in a browser) that shows each record's full body with the disclaimer
+highlighted and stored-vs-disclaimer side by side. Review with the keyboard
+(keep / use disclaimer / correct / skip); decisions persist in the browser and
+export to a CSV, which `apply_corrections.py` writes back as `committee_source=human`:
+
+```bash
+uv run python scripts/build_review_site.py --reason contradicts-disclaimer
+# open state/validation/review.html, review, click "Export decisions CSV"
+uv run python scripts/apply_corrections.py committee_decisions.csv --dry-run
+uv run python scripts/apply_corrections.py committee_decisions.csv
+```
 
 ### Screenshot Emails
 
