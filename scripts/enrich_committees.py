@@ -27,7 +27,7 @@ from pathlib import Path
 from committee_utils import needs_committee, normalize_committee
 from utils import DATA_DIR, load_jsonl, save_jsonl
 
-DEFAULT_MODEL = "qwen3:4b"
+DEFAULT_MODEL = "qwen3.5:4b-mlx"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
 
