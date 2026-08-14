@@ -20,6 +20,8 @@ re-running a month retries any records still unresolved.
 """
 
 import argparse
+import gc
+import resource
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
@@ -29,6 +31,24 @@ from utils import DATA_DIR, load_jsonl, save_jsonl
 
 DEFAULT_MODEL = "qwen3:4b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
+
+
+def raise_fd_limit(target=16384):
+    """Raise the open-file soft limit.
+
+    litellm/Ollama leak ~1-2 file descriptors per call (a new asyncio event loop
+    + httpx pool per request), and macOS's default soft limit is only 256, so a
+    long enrichment run hits "Too many open files" after ~150 calls. Don't rely
+    on the caller's shell ulimit -- raise it in-process.
+    """
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft >= target:
+            return
+        new_soft = target if hard == resource.RLIM_INFINITY else min(target, hard)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+    except (ValueError, OSError):
+        pass
 
 
 def configure_dspy(model, ollama_url, disable_thinking=True):
@@ -46,6 +66,7 @@ def configure_dspy(model, ollama_url, disable_thinking=True):
         kwargs["think"] = False
     lm = dspy.LM(f"ollama_chat/{model}", **kwargs)
     dspy.configure(lm=lm)
+    raise_fd_limit()
 
 
 def day_files_for_range(start, end):
@@ -180,6 +201,8 @@ def main():
 
         if day_changed and not args.dry_run:
             save_jsonl(path, records)
+        # Reclaim the event-loop/httpx fds litellm leaves behind each day.
+        gc.collect()
         print(f"  {path.stem}: {len(pending)} pending, {processed} processed so far")
 
         if args.limit is not None and processed >= args.limit:
