@@ -38,17 +38,30 @@ def cm_path(year):
     return FEC_DIR / f"cm{str(year)[2:]}.zip"
 
 
-def download_fec(years=CYCLES, refresh=False):
+def cn_url(year):
+    return f"https://www.fec.gov/files/bulk-downloads/{year}/cn{str(year)[2:]}.zip"
+
+
+def cn_path(year):
+    return FEC_DIR / f"cn{str(year)[2:]}.zip"
+
+
+def download_fec(years=CYCLES, refresh=False, candidates=True):
+    """Download FEC committee master (cm) and, by default, candidate master (cn)."""
     FEC_DIR.mkdir(parents=True, exist_ok=True)
-    for year in years:
-        path = cm_path(year)
-        if path.exists() and not refresh:
-            continue
-        try:
-            print(f"Downloading FEC cm{str(year)[2:]}.zip ...")
-            urllib.request.urlretrieve(cm_url(year), path)
-        except Exception as e:  # noqa: BLE001
-            print(f"  [warn] {year} failed: {e} (continuing with available cycles)")
+    jobs = [("cm", cm_url, cm_path)]
+    if candidates:
+        jobs.append(("cn", cn_url, cn_path))
+    for label, url_fn, path_fn in jobs:
+        for year in years:
+            path = path_fn(year)
+            if path.exists() and not refresh:
+                continue
+            try:
+                print(f"Downloading FEC {label}{str(year)[2:]}.zip ...")
+                urllib.request.urlretrieve(url_fn(year), path)
+            except Exception as e:  # noqa: BLE001
+                print(f"  [warn] {label} {year} failed: {e} (continuing)")
 
 
 def load_fec_index(years=CYCLES):

@@ -20,6 +20,7 @@ import argparse
 import csv
 import sys
 import urllib.request
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -112,6 +113,24 @@ def score(pairs, predict, label):
     return misses
 
 
+def score_party(pairs):
+    """Score stored archive party against gold party (rows with a gold party)."""
+    n = len(pairs)
+    if not n:
+        return
+    covered = sum(1 for _g, p in pairs if p)
+    correct = sum(1 for g, p in pairs if p and p == g)
+    print(f"\n=== party: stored vs gold (n={n}) ===")
+    print(f"  coverage (non-null stored): {covered}/{n} ({covered/n*100:.1f}%)")
+    print(f"  accuracy on covered:        {correct}/{covered} "
+          f"({correct/covered*100:.1f}%)" if covered else "  (no coverage)")
+    grid = Counter((g, p or "None") for g, p in pairs)
+    print("  gold -> stored:")
+    for (g, p), c in sorted(grid.items()):
+        flag = "" if (p == g or p == "None") else "  <-- mismatch"
+        print(f"    {g} -> {p}: {c}{flag}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--refresh", action="store_true", help="Re-download the gold set")
@@ -129,6 +148,7 @@ def main():
     print(f"Archive Nov-2024 records indexed: {len(index)}")
 
     joined = []      # (gold_committee, archive_record)
+    party_pairs = []  # (gold_party, stored_party) for rows with a gold party
     unjoined = 0
     for row in gold_rows:
         k = gold_key(row)
@@ -137,6 +157,9 @@ def main():
             unjoined += 1
             continue
         joined.append((row["committee"].strip(), rec))
+        gp = (row.get("party") or "").strip().upper()
+        if gp:
+            party_pairs.append((gp, rec.get("party")))
     jr = len(joined)
     print(f"Joined to archive: {jr}/{len(gold_rows)} ({jr/len(gold_rows)*100:.1f}%); "
           f"unjoined: {unjoined}")
@@ -156,6 +179,8 @@ def main():
             print(f"\n  {label} confusion (gold | pred):")
             for gold, pred in misses[: args.show_misses]:
                 print(f"    {gold!r:40} | {pred!r}")
+
+    score_party(party_pairs)
 
     if args.model:
         import dspy

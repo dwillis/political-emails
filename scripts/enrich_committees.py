@@ -112,6 +112,39 @@ def identify(module, rec):
     return normalize_committee(prediction.committee), getattr(prediction, "source", "llm")
 
 
+def build_party_deriver():
+    """Return a callable (committee, fill_source) -> (party, source), or None.
+
+    Uses FEC (with candidate linkage) + overrides + committee-name keywords, the
+    same signals the sweep uses minus majority (which needs a full-tree pass).
+    Degrades to None if the FEC cache can't be built.
+    """
+    try:
+        from fec_match import download_fec, load_fec_index, match_name
+        from party_utils import derive_committee_party, load_fec_party_map, load_party_overrides
+        from utils import CONFIG_DIR
+        download_fec()
+        name_index, buckets = load_fec_index()
+        fec_party_map = load_fec_party_map()
+        overrides = load_party_overrides(CONFIG_DIR / "committee_party_overrides.csv")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [warn] party derivation disabled: {e}")
+        return None
+
+    cache = {}
+
+    def fec_lookup(norm):
+        if norm not in cache:
+            mt, fid, _n, _s = match_name(norm, name_index, buckets)
+            cache[norm] = fid if mt == "exact" else None
+        return cache[norm]
+
+    def derive(committee, fill_source):
+        return derive_committee_party(committee, fill_source, fec_lookup, fec_party_map, overrides)
+
+    return derive
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_argument_group("date range (default: previous month)")
@@ -123,6 +156,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Max records to process (for testing)")
     parser.add_argument("--workers", type=int, default=1, help="Concurrent LLM workers per day (needs OLLAMA_NUM_PARALLEL>1 to help)")
     parser.add_argument("--allow-thinking", action="store_true", help="Don't disable model reasoning (needed for non-thinking instruct models)")
+    parser.add_argument("--skip-party", action="store_true", help="Don't derive party when filling committees")
     parser.add_argument("--dry-run", action="store_true", help="Identify but don't write files")
     args = parser.parse_args()
 
@@ -131,6 +165,7 @@ def main():
     from identify_committee import IdentifyCommitteeModule
 
     module = IdentifyCommitteeModule()
+    derive_party = None if args.skip_party else build_party_deriver()
     start, end = resolve_range(args)
     print(f"Enriching committees for {start} .. {end} (LLM fallback: Ollama '{args.model}')")
 
@@ -138,6 +173,7 @@ def main():
     filled = 0
     unknown = 0
     errors = 0
+    party_filled = 0
 
     for path in day_files_for_range(start, end):
         records = load_jsonl(path)
@@ -159,7 +195,7 @@ def main():
 
             result is the (committee_or_None, source) tuple from identify().
             """
-            nonlocal processed, filled, unknown, errors, day_changed
+            nonlocal processed, filled, unknown, errors, day_changed, party_filled
             processed += 1
             if exc is not None:
                 if is_connection_error(exc):
@@ -171,11 +207,17 @@ def main():
             committee, source = result
             if committee is not None:
                 rec["committee"] = committee
-                rec["committee_source"] = (
-                    "disclaimer" if source == "disclaimer" else f"llm:{args.model}"
-                )
+                committee_source = "disclaimer" if source == "disclaimer" else f"llm:{args.model}"
+                rec["committee_source"] = committee_source
                 filled += 1
                 day_changed = True
+                # Derive party from the newly-known committee (never overrides human).
+                if derive_party is not None and rec.get("party_source") != "human":
+                    p, psrc = derive_party(committee, committee_source)
+                    if p is not None and rec.get("party") != p:
+                        rec["party"] = p
+                        rec["party_source"] = psrc
+                        party_filled += 1
             else:
                 unknown += 1
 
@@ -211,8 +253,8 @@ def main():
 
     action = "would fill" if args.dry_run else "filled"
     print(
-        f"\nDone. Processed {processed:,} records: {action} {filled:,} committees, "
-        f"{unknown:,} unresolved (null), {errors:,} errors."
+        f"\nDone. Processed {processed:,} records: {action} {filled:,} committees "
+        f"({party_filled:,} party derived), {unknown:,} unresolved (null), {errors:,} errors."
     )
 
 

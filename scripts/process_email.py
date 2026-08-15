@@ -12,6 +12,7 @@ import html2text
 import csv
 import json
 import re
+import sys
 import unicodedata
 
 
@@ -293,18 +294,27 @@ def extract_body_content(message):
 # Analysis helpers
 # ---------------------------------------------------------------------------
 
-def determine_party(body, origin_domain, domain_party_map):
-    """Determine political party based on domain mapping first, then body heuristics."""
+def determine_party(body, origin_domain, domain_party_map, urls=None):
+    """Provisional party at collection time. Returns (party, source).
+
+    Domain map first (authoritative sender mapping), then a fundraising-platform
+    signal decided by link counts (ActBlue/NGP VAN -> D, WinRed -> R); a tie or
+    no signal yields None. Committee-derived party (FEC, name, majority) is
+    applied later by the enrichment/sweep steps and outranks this.
+    """
     if not body:
-        return None
-    if origin_domain and origin_domain.strip() in domain_party_map:
-        return domain_party_map[origin_domain.strip()]
-    body_lower = body.lower()
-    if 'actblue.com' in body_lower or 'ngpvan.com' in body_lower:
-        return 'D'
-    if 'winred.com' in body_lower or 'anedot.com' in body_lower:
-        return 'R'
-    return None
+        return (None, None)
+    if origin_domain and origin_domain.strip().lower() in domain_party_map:
+        return (domain_party_map[origin_domain.strip().lower()], "domain-map")
+    # Count platform links (fall back to body-substring presence when no urls).
+    haystack = urls if urls else [body.lower()]
+    d = sum(1 for u in haystack if "actblue.com" in u.lower() or "ngpvan.com" in u.lower())
+    r = sum(1 for u in haystack if "winred.com" in u.lower())
+    if d > r:
+        return ("D", "platform")
+    if r > d:
+        return ("R", "platform")
+    return (None, None)
 
 
 def has_disclaimer(body):
@@ -348,7 +358,11 @@ def load_domain_party_map(path):
         next(reader)  # Skip header
         for row in reader:
             domain, party = row
-            domain_party_map[domain] = party
+            key = domain.strip().lower()
+            if key in domain_party_map and domain_party_map[key] != party:
+                print(f"  [warn] conflicting party map for {key}: "
+                      f"{domain_party_map[key]} vs {party}", file=sys.stderr)
+            domain_party_map[key] = party
     return domain_party_map
 
 
@@ -407,6 +421,7 @@ def process_single_email(message, domain_party_map):
     body = ''
     clean_body = ''
     party = None
+    party_source = None
     disclaimer = False
     disclaimer_text = ''
     urls = []
@@ -415,7 +430,7 @@ def process_single_email(message, domain_party_map):
         body, clean_body = extract_body_content(message)
         if body:
             urls = extract_urls(body)
-            party = determine_party(body, origin_domain, domain_party_map)
+            party, party_source = determine_party(body, origin_domain, domain_party_map, urls)
             disclaimer = has_disclaimer(body)
             disclaimer_text = extract_disclaimer_text(body)
     except Exception:
@@ -467,6 +482,7 @@ def process_single_email(message, domain_party_map):
     record['urls'] = urls
     record['committee'] = None
     record['committee_source'] = None
+    record['party_source'] = party_source
 
     return record
 

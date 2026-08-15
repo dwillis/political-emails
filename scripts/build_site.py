@@ -38,8 +38,18 @@ PRIMARY = "#1e4d2b"       # deep forest green
 PRIMARY_LIGHT = "#2d6a3e"  # slightly lighter for header hover/variant
 ACCENT = "#e89b3c"         # warm amber
 ACCENT_LIGHT = "#f4c37d"   # pale amber
-PARTY_COLORS = {"D": "#2b6cb0", "R": "#c53030", "unknown": "#a0aec0"}
+PARTY_COLORS = {"D": "#2b6cb0", "R": "#c53030", "OTH": "#6b46c1", "unknown": "#a0aec0"}
 KEYWORD_LINE_COLORS = {"Total": ACCENT, **PARTY_COLORS}
+PARTY_BUCKETS = ("D", "R", "OTH", "unknown")
+
+
+def party_bucket(party):
+    """Bucket a raw party value: D/R kept, I/G -> OTH, everything else unknown."""
+    if party in ("D", "R"):
+        return party
+    if party in ("I", "G"):
+        return "OTH"
+    return "unknown"
 
 
 SHARED_CSS = f"""
@@ -248,14 +258,14 @@ def compute_stats(years, keyword_patterns=None):
 
     total_records = 0
     disclaimer_count = 0
-    party_counts = {"D": 0, "R": 0, "unknown": 0}
+    party_counts = {b: 0 for b in PARTY_BUCKETS}
     domain_counter = Counter()
     by_year = {}
     keyword_daily = {kw: {} for kw in compiled}
     all_dates = set()
 
     for year, months in years.items():
-        year_stats = {"total": 0, "D": 0, "R": 0, "unknown": 0, "disclaimer": 0}
+        year_stats = {"total": 0, **{b: 0 for b in PARTY_BUCKETS}, "disclaimer": 0}
         for month_num, days in months.items():
             for d in days:
                 date_key = Path(d["path"]).stem  # "YYYY-MM-DD"
@@ -274,8 +284,7 @@ def compute_stats(years, keyword_patterns=None):
                         total_records += 1
                         year_stats["total"] += 1
 
-                        party = rec.get("party")
-                        bucket = party if party in ("D", "R") else "unknown"
+                        bucket = party_bucket(rec.get("party"))
                         party_counts[bucket] += 1
                         year_stats[bucket] += 1
 
@@ -294,7 +303,7 @@ def compute_stats(years, keyword_patterns=None):
                             for kw, pattern in compiled.items():
                                 if pattern.search(haystack):
                                     day_tally = keyword_daily[kw].setdefault(
-                                        date_key, {"D": 0, "R": 0, "unknown": 0}
+                                        date_key, {b: 0 for b in PARTY_BUCKETS}
                                     )
                                     day_tally[bucket] += 1
         if year_stats["total"] > 0:
@@ -536,7 +545,7 @@ def build_keyword_charts(stats, window_days=KEYWORD_CHART_WINDOW_DAYS):
                 sum(daily.get(d, {}).get(party, 0) for d in days)
                 for _, days in weeks
             ]
-            for party in ("D", "R", "unknown")
+            for party in PARTY_BUCKETS
         }
         # Skip a keyword that never matched anything.
         if not any(any(vals) for vals in series.values()):
@@ -566,11 +575,12 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     disclaimer_pct = round(100 * stats["disclaimer_count"] / total)
     d_pct = round(100 * stats["party_counts"]["D"] / total)
     r_pct = round(100 * stats["party_counts"]["R"] / total)
+    oth_pct = round(100 * stats["party_counts"]["OTH"] / total)
 
     # Prepare chart data
     year_totals = {y: s["total"] for y, s in sorted(stats["by_year"].items())}
     year_party = {
-        y: {"D": s["D"], "R": s["R"], "unknown": s["unknown"]}
+        y: {b: s[b] for b in PARTY_BUCKETS}
         for y, s in sorted(stats["by_year"].items())
     }
 
@@ -579,7 +589,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     )
     chart_party_by_year = stacked_bar_chart(
         year_party,
-        categories=["D", "R", "unknown"],
+        categories=list(PARTY_BUCKETS),
         colors=PARTY_COLORS,
         title="Party breakdown by year",
     )
@@ -731,6 +741,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     }
     .email-card.party-D { border-left-color: #2b6cb0; }
     .email-card.party-R { border-left-color: #c53030; }
+    .email-card.party-OTH { border-left-color: #6b46c1; }
     .email-card.party-unknown { border-left-color: #a0aec0; }
     .email-card.hidden { display: none; }
     .email-meta {
@@ -752,6 +763,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     }
     .party-badge.D { background: #2b6cb0; }
     .party-badge.R { background: #c53030; }
+    .party-badge.OTH { background: #6b46c1; }
     .party-badge.unknown { background: #a0aec0; }
     .disclaimer-tag {
       font-size: 0.7rem;
@@ -815,27 +827,12 @@ def generate_dashboard_html(stats, download_info, recent_summary):
         <div class="stat-label">Republican</div>
         <div class="stat-meta">{r_pct}% of total</div>
       </div>
+      <div class="stat-card">
+        <div class="stat-value">{stats["party_counts"]["OTH"]:,}</div>
+        <div class="stat-label">Other (I/G)</div>
+        <div class="stat-meta">{oth_pct}% of total</div>
+      </div>
     </section>
-
-    <h2>Latest emails — past 24 hours</h2>
-    <p class="recent-meta">{recent_summary["count"]:,} emails received in the last 24 hours (as of {recent_summary["end_iso"][:16].replace("T", " ")} UTC).</p>
-    <div class="filter-bar">
-      <div class="filter-group">
-        <span class="label">Party</span>
-        <button class="filter-chip active" data-filter="party" data-value="all">All</button>
-        <button class="filter-chip" data-filter="party" data-value="D">D</button>
-        <button class="filter-chip" data-filter="party" data-value="R">R</button>
-        <button class="filter-chip" data-filter="party" data-value="unknown">Unknown</button>
-      </div>
-      <div class="filter-group">
-        <span class="label">Disclaimer</span>
-        <button class="filter-chip active" data-filter="disclaimer" data-value="any">Any</button>
-        <button class="filter-chip" data-filter="disclaimer" data-value="yes">With</button>
-        <button class="filter-chip" data-filter="disclaimer" data-value="no">Without</button>
-      </div>
-      <span class="filter-count" id="filter-count"></span>
-    </div>
-    <div id="recent-list"><p class="recent-meta">Loading…</p></div>
 
     {chart_emails_per_year}
     {chart_party_by_year}
@@ -848,6 +845,27 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     {current_month_link}
     {latest_year_link}
     <p class="dl-all"><a href="downloads.html">See all monthly and yearly archives →</a></p>
+
+    <h2>Latest emails — past 24 hours</h2>
+    <p class="recent-meta">{recent_summary["count"]:,} emails received in the last 24 hours (as of {recent_summary["end_iso"][:16].replace("T", " ")} UTC).</p>
+    <div class="filter-bar">
+      <div class="filter-group">
+        <span class="label">Party</span>
+        <button class="filter-chip active" data-filter="party" data-value="all">All</button>
+        <button class="filter-chip" data-filter="party" data-value="D">D</button>
+        <button class="filter-chip" data-filter="party" data-value="R">R</button>
+        <button class="filter-chip" data-filter="party" data-value="OTH">Other</button>
+        <button class="filter-chip" data-filter="party" data-value="unknown">Unknown</button>
+      </div>
+      <div class="filter-group">
+        <span class="label">Disclaimer</span>
+        <button class="filter-chip active" data-filter="disclaimer" data-value="any">Any</button>
+        <button class="filter-chip" data-filter="disclaimer" data-value="yes">With</button>
+        <button class="filter-chip" data-filter="disclaimer" data-value="no">Without</button>
+      </div>
+      <span class="filter-count" id="filter-count"></span>
+    </div>
+    <div id="recent-list"><p class="recent-meta">Loading…</p></div>
   </main>
 
   <footer>
@@ -875,7 +893,9 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     }}
 
     function partyKey(p) {{
-      return p === "D" || p === "R" ? p : "unknown";
+      if (p === "D" || p === "R") return p;
+      if (p === "I" || p === "G") return "OTH";
+      return "unknown";
     }}
 
     function render(emails) {{
@@ -952,7 +972,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
 
 
 def _party_label(party):
-    return {"D": "D", "R": "R"}.get(party, "Unknown")
+    return {"D": "D", "R": "R", "I": "OTH", "G": "OTH"}.get(party, "Unknown")
 
 
 def _format_long_date(day):
@@ -1006,7 +1026,7 @@ def generate_topic_html(topic, day, emails, generated_iso):
 
     cards = []
     for e in emails:
-        color = PARTY_COLORS.get(e.get("party"), PARTY_COLORS["unknown"])
+        color = PARTY_COLORS[party_bucket(e.get("party"))]
         when = str(e.get("date", ""))[:16].replace("T", " ")
         sender = e.get("name") or e.get("email") or "Unknown sender"
         cards.append(f"""
