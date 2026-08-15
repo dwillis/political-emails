@@ -1,9 +1,10 @@
 """Tests for build_site stat computation."""
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from build_site import compute_stats
+from build_site import _clean_preview, compute_stats
 
 
 def _write_jsonl(path, records):
@@ -11,6 +12,41 @@ def _write_jsonl(path, records):
     with open(path, "w") as f:
         for r in records:
             f.write(json.dumps(r) + "\n")
+
+
+def test_clean_preview_strips_table_debris():
+    text = "You are the LAST holdout from 34223 | | | | | Are you still there"
+    out = _clean_preview(text)
+    assert "|" not in out
+    assert "holdout from 34223 Are you still there" in out
+
+
+def test_clean_preview_strips_markdown_and_collapses():
+    assert _clean_preview("## Header --- **bold** text") == "Header bold text"
+
+
+def test_clean_preview_truncates_on_word_boundary():
+    out = _clean_preview("word " * 100, limit=40)
+    assert out.endswith("…") and len(out) <= 42 and " wor" not in out[-5:]
+
+
+def test_build_recent_includes_committee(tmp_path, monkeypatch):
+    import build_site
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(minutes=30)).isoformat()
+    d = now.date()
+    path = tmp_path / f"{d.year:04d}" / f"{d.month:02d}" / f"{d.year:04d}-{d.month:02d}-{d.day:02d}.jsonl"
+    _write_jsonl(path, [{
+        "date": recent, "name": "Team X", "email": "a@x.com", "domain": "x.com",
+        "subject": "Hi", "body": "hello | | |", "committee": "X for Congress",
+        "party": "D", "disclaimer": True,
+    }])
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(build_site, "DOCS_DIR", tmp_path / "docs")
+    build_site.build_recent()
+    payload = json.loads((tmp_path / "docs" / "recent.json").read_text())
+    assert payload["emails"][0]["committee"] == "X for Congress"
+    assert "|" not in payload["emails"][0]["preview"]
 
 
 def test_compute_stats_counts_basic(tmp_path, monkeypatch):

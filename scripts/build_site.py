@@ -393,10 +393,19 @@ def build_downloads(years):
     return download_info
 
 
-def _truncate_preview(text, limit=200):
-    """Truncate to ~limit chars on a word boundary, collapsing whitespace."""
+_PREVIEW_JUNK_RE = re.compile(r"(?:\s*\|)+|-{2,}|#+|\*{2,}|_{2,}")
+
+
+def _clean_preview(text, limit=200):
+    """Strip html2text table/markdown debris, then word-boundary truncate.
+
+    Email bodies converted from HTML carry pipe-delimited table scaffolding
+    ("| | | |"), horizontal rules ("---") and markdown emphasis that read as
+    noise in a one-line preview.
+    """
     if not text:
         return ""
+    text = _PREVIEW_JUNK_RE.sub(" ", text)
     text = " ".join(text.split())
     if len(text) <= limit:
         return text
@@ -445,7 +454,7 @@ def build_recent(hours=24):
                     ts = ts.replace(tzinfo=timezone.utc)
                 if ts < cutoff:
                     continue
-                preview = _truncate_preview(rec.get("clean_body") or rec.get("body") or "")
+                preview = _clean_preview(rec.get("clean_body") or rec.get("body") or "")
                 records.append({
                     "ts": ts.astimezone(timezone.utc).isoformat(),
                     "name": rec.get("name") or "",
@@ -453,6 +462,7 @@ def build_recent(hours=24):
                     "domain": rec.get("domain") or "",
                     "subject": rec.get("subject") or "",
                     "preview": preview,
+                    "committee": rec.get("committee") or "",
                     "party": rec.get("party"),
                     "disclaimer": bool(rec.get("disclaimer")),
                 })
@@ -653,9 +663,12 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     dashboard_css = """
     .stats {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
       gap: 1rem;
       margin-bottom: 2rem;
+    }
+    @media (min-width: 720px) {
+      .stats { grid-template-columns: repeat(5, 1fr); }
     }
     .stat-card {
       background: white;
@@ -731,55 +744,74 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     }
     .filter-count { margin-left: auto; font-size: 0.8rem; color: #888; }
 
-    .email-card {
+    #recent-list { display: flex; flex-direction: column; gap: 0.3rem; }
+    .email-row {
       background: white;
       border: 1px solid var(--border);
       border-left: 3px solid var(--border);
       border-radius: 4px;
-      padding: 0.7rem 0.9rem;
-      margin-bottom: 0.5rem;
     }
-    .email-card.party-D { border-left-color: #2b6cb0; }
-    .email-card.party-R { border-left-color: #c53030; }
-    .email-card.party-OTH { border-left-color: #6b46c1; }
-    .email-card.party-unknown { border-left-color: #a0aec0; }
-    .email-card.hidden { display: none; }
-    .email-meta {
+    .email-row.party-D { border-left-color: #2b6cb0; }
+    .email-row.party-R { border-left-color: #c53030; }
+    .email-row.party-OTH { border-left-color: #6b46c1; }
+    .email-row.party-unknown { border-left-color: #a0aec0; }
+    .email-row.hidden { display: none; }
+    .email-head {
+      display: grid;
+      grid-template-columns: auto auto minmax(0, 1fr);
+      gap: 0.6rem; align-items: center;
+      padding: 0.5rem 0.8rem;
+      cursor: pointer;
+      font-size: 0.86rem;
+      list-style: none;
+    }
+    .email-head::-webkit-details-marker { display: none; }
+    .email-head .ts { color: #999; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .email-head .dot {
+      width: 9px; height: 9px; border-radius: 50%; flex: none;
+      background: #cbd5e0; box-shadow: inset 0 0 0 1px #a0aec0;
+    }
+    .email-head .dot.party-D { background: #2b6cb0; box-shadow: none; }
+    .email-head .dot.party-R { background: #c53030; box-shadow: none; }
+    .email-head .dot.party-OTH { background: #6b46c1; box-shadow: none; }
+    .email-head .dot.party-unknown { background: transparent; }
+    .email-head .line {
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+    }
+    .email-head .identity { color: var(--text); font-weight: 600; }
+    .email-head .subject { color: #666; }
+    .email-body {
+      display: none;
+      padding: 0 0.8rem 0.7rem 0.8rem;
+      border-top: 1px solid var(--border);
+      margin-top: -1px;
+    }
+    details[open] > .email-body { display: block; }
+    .email-body .preview { font-size: 0.86rem; color: #555; margin: 0.5rem 0; }
+    .email-body .detail {
       display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
-      font-size: 0.8rem; color: #666;
-      margin-bottom: 0.25rem;
+      font-size: 0.78rem; color: #888;
     }
-    .email-meta .ts { font-variant-numeric: tabular-nums; color: #999; }
-    .email-meta .sender { color: var(--text); font-weight: 600; }
-    .email-meta .addr { color: #999; font-size: 0.78rem; }
+    .email-body .detail .committee { color: var(--text); font-weight: 600; }
     .party-badge {
       display: inline-block;
-      font-size: 0.7rem;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      padding: 0.05rem 0.4rem;
-      border-radius: 3px;
-      color: white;
+      font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em;
+      padding: 0.02rem 0.35rem; border-radius: 3px; color: white;
     }
     .party-badge.D { background: #2b6cb0; }
     .party-badge.R { background: #c53030; }
     .party-badge.OTH { background: #6b46c1; }
     .party-badge.unknown { background: #a0aec0; }
     .disclaimer-tag {
-      font-size: 0.7rem;
-      color: var(--primary);
-      border: 1px solid var(--primary);
-      border-radius: 3px;
-      padding: 0.02rem 0.35rem;
+      font-size: 0.7rem; color: var(--primary);
+      border: 1px solid var(--primary); border-radius: 3px; padding: 0.02rem 0.35rem;
     }
-    .email-subject {
-      font-size: 1.02rem; font-weight: 600; color: var(--text);
-      margin: 0.1rem 0 0.25rem;
+    .show-all-btn {
+      display: block; width: 100%; margin-top: 0.5rem; padding: 0.5rem;
+      background: white; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--primary); font: inherit; font-size: 0.85rem; cursor: pointer;
     }
-    .email-preview {
-      font-size: 0.88rem; color: #555;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
+    .show-all-btn:hover { border-color: var(--primary); }
     .recent-empty, .recent-error {
       padding: 1rem; background: white;
       border: 1px dashed var(--border); border-radius: 4px;
@@ -874,7 +906,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
   </footer>
   <script>
   (function() {{
-    var state = {{ party: "all", disclaimer: "any" }};
+    var state = {{ party: "all", disclaimer: "any", showAll: false }};
     var listEl = document.getElementById("recent-list");
     var countEl = document.getElementById("filter-count");
 
@@ -898,66 +930,80 @@ def generate_dashboard_html(stats, download_info, recent_summary):
       return "unknown";
     }}
 
-    function render(emails) {{
-      if (!emails.length) {{
+    var allEmails = [];
+    var CAP = 50;
+
+    function matches(e) {{
+      var pk = partyKey(e.party);
+      var d = e.disclaimer ? "yes" : "no";
+      return (state.party === "all" || state.party === pk) &&
+             (state.disclaimer === "any" || state.disclaimer === d);
+    }}
+
+    function rowHtml(e) {{
+      var pk = partyKey(e.party);
+      var identity = e.committee || e.name || e.email || "(unknown sender)";
+      var line = '<span class="line"><span class="identity">' + escapeHtml(identity) + '</span>' +
+                 (e.subject ? ' <span class="subject">— ' + escapeHtml(e.subject) + '</span>' : '') +
+                 '</span>';
+      var disc = e.disclaimer ? '<span class="disclaimer-tag">disclaimer</span>' : '';
+      var committee = e.committee ? '<span class="committee">Paid for by ' + escapeHtml(e.committee) + '</span>' : '';
+      var sender = escapeHtml(e.name || '(unknown sender)') +
+                   (e.email ? ' &lt;' + escapeHtml(e.email) + '&gt;' : '');
+      var preview = e.preview ? '<div class="preview">' + escapeHtml(e.preview) + '</div>' : '';
+      return '<details class="email-row party-' + pk + '"' +
+             ' data-party="' + pk + '" data-disclaimer="' + (e.disclaimer ? "yes" : "no") + '">' +
+        '<summary class="email-head">' +
+          '<span class="ts">' + escapeHtml(fmtTime(e.ts)) + '</span>' +
+          '<span class="dot party-' + pk + '"></span>' +
+          line +
+        '</summary>' +
+        '<div class="email-body">' + preview +
+          '<div class="detail">' + committee + '<span class="sender">' + sender + '</span>' + disc + '</div>' +
+        '</div>' +
+      '</details>';
+    }}
+
+    function render() {{
+      if (!allEmails.length) {{
         listEl.innerHTML = '<p class="recent-empty">No emails in the last 24 hours.</p>';
         countEl.textContent = "";
         return;
       }}
-      var html = emails.map(function(e) {{
-        var pk = partyKey(e.party);
-        var sender = e.name || e.email || "(unknown sender)";
-        var addr = e.email ? '<span class="addr">&lt;' + escapeHtml(e.email) + '&gt;</span>' : "";
-        var disc = e.disclaimer ? '<span class="disclaimer-tag">disclaimer</span>' : "";
-        var preview = e.preview ? '<div class="email-preview">' + escapeHtml(e.preview) + '</div>' : "";
-        return '<article class="email-card party-' + pk + '"' +
-               ' data-party="' + pk + '"' +
-               ' data-disclaimer="' + (e.disclaimer ? "yes" : "no") + '">' +
-          '<div class="email-meta">' +
-            '<span class="ts">' + escapeHtml(fmtTime(e.ts)) + '</span>' +
-            '<span class="sender">' + escapeHtml(sender) + '</span>' + addr +
-            '<span class="party-badge ' + pk + '">' + (pk === "unknown" ? "?" : pk) + '</span>' +
-            disc +
-          '</div>' +
-          '<div class="email-subject">' + escapeHtml(e.subject) + '</div>' +
-          preview +
-        '</article>';
-      }}).join("");
+      var filtered = allEmails.filter(matches);
+      if (!filtered.length) {{
+        listEl.innerHTML = '<p class="recent-empty">No emails match these filters.</p>';
+        countEl.textContent = "Showing 0 of " + allEmails.length.toLocaleString();
+        return;
+      }}
+      var shown = state.showAll ? filtered : filtered.slice(0, CAP);
+      var html = shown.map(rowHtml).join("");
+      if (!state.showAll && filtered.length > CAP) {{
+        html += '<button class="show-all-btn" id="show-all">Show all ' +
+                filtered.length.toLocaleString() + ' emails</button>';
+      }}
       listEl.innerHTML = html;
-      applyFilters();
-    }}
-
-    function applyFilters() {{
-      var cards = listEl.querySelectorAll(".email-card");
-      var visible = 0;
-      cards.forEach(function(c) {{
-        var p = c.getAttribute("data-party");
-        var d = c.getAttribute("data-disclaimer");
-        var show = (state.party === "all" || state.party === p) &&
-                   (state.disclaimer === "any" ||
-                    (state.disclaimer === "yes" && d === "yes") ||
-                    (state.disclaimer === "no" && d === "no"));
-        c.classList.toggle("hidden", !show);
-        if (show) visible++;
-      }});
-      countEl.textContent = "Showing " + visible.toLocaleString() + " of " + cards.length.toLocaleString();
+      var btn = document.getElementById("show-all");
+      if (btn) btn.addEventListener("click", function() {{ state.showAll = true; render(); }});
+      countEl.textContent = "Showing " + shown.length.toLocaleString() +
+                            " of " + filtered.length.toLocaleString();
     }}
 
     document.querySelectorAll(".filter-chip").forEach(function(btn) {{
       btn.addEventListener("click", function() {{
         var filter = btn.getAttribute("data-filter");
-        var value = btn.getAttribute("data-value");
-        state[filter] = value;
+        state[filter] = btn.getAttribute("data-value");
+        state.showAll = false;
         document.querySelectorAll('.filter-chip[data-filter="' + filter + '"]').forEach(function(b) {{
           b.classList.toggle("active", b === btn);
         }});
-        applyFilters();
+        render();
       }});
     }});
 
     fetch("recent.json", {{ cache: "no-cache" }})
       .then(function(r) {{ if (!r.ok) throw new Error(r.status); return r.json(); }})
-      .then(function(data) {{ render(data.emails || []); }})
+      .then(function(data) {{ allEmails = data.emails || []; render(); }})
       .catch(function() {{
         listEl.innerHTML = '<p class="recent-error">Could not load recent emails. ' +
           'See <a href="downloads.html">downloads</a> for the full archive.</p>';
