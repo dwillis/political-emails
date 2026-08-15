@@ -186,6 +186,42 @@ uv run python scripts/apply_corrections.py committee_decisions.csv --dry-run
 uv run python scripts/apply_corrections.py committee_decisions.csv
 ```
 
+### Party derivation
+
+`party` (D/R/I/G or null) is derived with committee-grounded signals taking
+precedence over the sender domain, since the committee is disclaimer-grounded.
+`party_source` records which signal won:
+
+| value | meaning |
+|-------|---------|
+| `human` | set by a person during review (most authoritative) |
+| `override` | curated [`config/committee_party_overrides.csv`](config/committee_party_overrides.csv) (`NONE` blocks derivation) |
+| `fec` | FEC committee master, preferring the linked candidate's registered party across cycles |
+| `committee-name` | committee-name keyword (only for disclaimer/human/FEC-matched committees) |
+| `committee-majority` | dominant party of the committee's other emails (≥20 records, ≥95%) |
+| `domain-map` | [`config/domain_party_mapping.csv`](config/domain_party_mapping.csv) |
+| `platform` | ActBlue/NGP VAN (D) vs WinRed (R) link counts |
+| `null` | party is null |
+
+Precedence: `human > override > fec > committee-name > committee-majority >
+domain-map > platform`. Media/newsletter senders (Trump Train News, BizPac
+Review, …) stay null — `party` means the sender committee's affiliation, not a
+partisan lean. New emails get a provisional domain/platform party at collection;
+committee-derived party is applied at enrichment and by the sweep.
+
+**One-time sweep** — derives party from committees, fills nulls, corrects
+contradictions (rented-domain contamination), adds `party_source`; idempotent:
+
+```bash
+uv run python scripts/apply_party_fixes.py --dry-run
+uv run python scripts/apply_party_fixes.py
+```
+
+Needs the FEC cache (`scripts/fec_match.py --download`, which now also fetches
+the candidate master `cn*.zip`). Score against the gold set's party column via
+`scripts/eval_committees.py`. Note: I and G still render as "unknown" in
+`build_site.py` party buckets — a known follow-up.
+
 ### Screenshot Emails
 
 Render faithful PNG screenshots of archived emails matching a keyword. Because
@@ -267,6 +303,7 @@ Each line in a JSONL file is a JSON record with these fields:
 | `urls` | array | URLs found in the email body |
 | `committee` | string/null | Political committee that sent the email (LLM-extracted; `null` when unknown or not yet determined) |
 | `committee_source` | string/null | How `committee` was derived: `disclaimer`, `llm:<model>`, `backfill`, or `null` |
+| `party_source` | string/null | How `party` was derived (see Party derivation below) |
 
 ## Automation
 

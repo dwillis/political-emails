@@ -22,6 +22,8 @@ def test_compute_stats_counts_basic(tmp_path, monkeypatch):
     _write_jsonl(tmp_path / "2025" / "03" / "2025-03-02.jsonl", [
         {"domain": "a.com", "party": "D", "disclaimer": True, "year": 2025},
         {"domain": "c.com", "party": None, "disclaimer": False, "year": 2025},
+        {"domain": "d.com", "party": "I", "disclaimer": False, "year": 2025},
+        {"domain": "e.com", "party": "G", "disclaimer": False, "year": 2025},
     ])
 
     import build_site
@@ -29,16 +31,18 @@ def test_compute_stats_counts_basic(tmp_path, monkeypatch):
 
     stats = compute_stats(build_site.scan_data())
 
-    assert stats["total_records"] == 4
+    assert stats["total_records"] == 6
     assert stats["disclaimer_count"] == 2
-    assert stats["party_counts"] == {"D": 2, "R": 1, "unknown": 1}
-    assert stats["unique_domains"] == 3
+    # I and G fold into the OTH (Other) bucket.
+    assert stats["party_counts"] == {"D": 2, "R": 1, "OTH": 2, "unknown": 1}
+    assert stats["unique_domains"] == 5
     assert stats["by_year"]["2024"]["total"] == 2
     assert stats["by_year"]["2024"]["D"] == 1
     assert stats["by_year"]["2024"]["R"] == 1
     assert stats["by_year"]["2024"]["disclaimer"] == 1
-    assert stats["by_year"]["2025"]["total"] == 2
+    assert stats["by_year"]["2025"]["total"] == 4
     assert stats["by_year"]["2025"]["unknown"] == 1
+    assert stats["by_year"]["2025"]["OTH"] == 2
     # Top domains: a.com=2, then b.com=1, c.com=1 (order of 1-counts not strict)
     top = dict(stats["top_domains"])
     assert top["a.com"] == 2
@@ -53,7 +57,7 @@ def test_compute_stats_empty(tmp_path, monkeypatch):
     stats = compute_stats(build_site.scan_data())
     assert stats["total_records"] == 0
     assert stats["disclaimer_count"] == 0
-    assert stats["party_counts"] == {"D": 0, "R": 0, "unknown": 0}
+    assert stats["party_counts"] == {"D": 0, "R": 0, "OTH": 0, "unknown": 0}
     assert stats["unique_domains"] == 0
     assert stats["by_year"] == {}
     assert stats["top_domains"] == []
@@ -102,11 +106,10 @@ def test_compute_stats_keyword_daily_tallies_by_party(tmp_path, monkeypatch):
     stats = compute_stats(build_site.scan_data(), keyword_patterns=PATTERNS)
 
     daily = stats["keyword_daily"]["datacenter"]
-    assert daily["2026-01-15"] == {"D": 1, "R": 1, "unknown": 1}
+    assert daily["2026-01-15"] == {"D": 1, "R": 1, "OTH": 0, "unknown": 1}
     # Day with no matches is absent (or zeroed); assert no false positives.
-    assert daily.get("2026-01-16", {"D": 0, "R": 0, "unknown": 0}) == {
-        "D": 0, "R": 0, "unknown": 0
-    }
+    zero = {"D": 0, "R": 0, "OTH": 0, "unknown": 0}
+    assert daily.get("2026-01-16", zero) == zero
 
 
 def test_build_keyword_charts_includes_total_line():
@@ -123,8 +126,8 @@ def test_build_keyword_charts_includes_total_line():
     }
     html = build_site.build_keyword_charts(stats)
     assert ">Total<" in html
-    # Total = D + R + unknown; 4 polylines (Total + three parties).
-    assert html.count("<polyline") == 4
+    # Total = D + R + OTH + unknown; 5 polylines (Total + four buckets).
+    assert html.count("<polyline") == 5
 
 
 def test_build_keyword_charts_aggregates_by_week():
