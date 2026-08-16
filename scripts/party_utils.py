@@ -17,6 +17,7 @@ from fec_match import CMTE_NM, CYCLES, cm_path, cn_path
 # FEC field positions.
 CMTE_PTY = 10   # cm.txt CMTE_PTY_AFFILIATION
 CMTE_CAND = 14  # cm.txt CAND_ID (linkage to the candidate master)
+CAND_NM = 1     # cn.txt CAND_NAME ("LAST, FIRST MIDDLE")
 CAND_PTY = 2    # cn.txt CAND_PTY_AFFILIATION
 FEC_PARTY_FOLD = {
     "DEM": "D", "DFL": "D",
@@ -104,6 +105,117 @@ def _load_candidate_party(years):
                 if _keep(p, cand.get(cid), cid in cand):
                     cand[cid] = p
     return cand
+
+
+# Tokens that are not part of a person's name (committee/sender boilerplate).
+_PERSON_BOILERPLATE = {
+    "team", "friends", "friend", "of", "for", "committee", "cmte", "elect",
+    "reelect", "vote", "congress", "congressional", "senate", "senator", "sen",
+    "governor", "gov", "president", "presidential", "campaign", "victory", "fund",
+    "pac", "inc", "llc", "ltd", "the", "dr", "hon", "mr", "mrs", "ms", "rep",
+    "us", "u", "s", "official", "hq", "headquarters", "esq",
+    "van",  # lone "van" is noise; multiword surnames match on their last token
+}
+# jr/sr/ii/iii/iv are deliberately NOT stripped; a name ending in one of these
+# suffixes is treated as unmatchable (see extract_person) rather than collapsing
+# "Donald Trump Jr." onto Donald Trump (a father/son party mismatch risk).
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv"}
+_STATES = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+    "maryland", "massachusetts", "michigan", "minnesota", "mississippi",
+    "missouri", "montana", "nebraska", "nevada", "hampshire", "jersey", "mexico",
+    "york", "carolina", "dakota", "ohio", "oklahoma", "oregon", "pennsylvania",
+    "rhode", "island", "tennessee", "texas", "utah", "vermont", "virginia",
+    "washington", "wisconsin", "wyoming",
+}
+
+
+def _person_tokens(text):
+    """Lowercased alphabetic name tokens with boilerplate/state words removed."""
+    s = text.lower()
+    for sep in (" from ", " via ", " and ", " with ", " w/ "):
+        idx = s.find(sep)
+        if idx != -1:
+            s = s[:idx]
+    s = re.split(r'[("|“]', s)[0]      # drop org in parens/quotes/after pipe
+    if " for " in s:                         # "Scott Jensen for Governor" -> before "for"
+        s = s.split(" for ")[0]
+    s = re.sub(r"[^a-z\s]", " ", s)
+    return [t for t in s.split() if t not in _PERSON_BOILERPLATE and t not in _STATES]
+
+
+def extract_person(text):
+    """Guess (first, last) from a sender name or committee string, or None.
+
+    Uses the first meaningful token as the given name and the LAST as the
+    surname (so multi-word surnames like "Van Orden" match on "orden", matching
+    how the candidate index is keyed). Returns None when fewer than two name
+    tokens survive (e.g. "Team Kiggans").
+    """
+    if not text:
+        return None
+    tokens = _person_tokens(text)
+    if len(tokens) < 2:
+        return None
+    if tokens[-1] in _NAME_SUFFIXES:
+        return None  # "Donald Trump Jr." -> ambiguous, don't guess
+    return (tokens[0], tokens[-1])
+
+
+def load_candidate_name_index(years=CYCLES):
+    """Return (full, initial) name indexes from cn.txt, party-bearing candidates.
+
+    full:    {"first last": {folded_party, ...}}
+    initial: {(last, first_initial): {folded_party, ...}}
+    Both key the surname on its LAST token to align with extract_person.
+    """
+    full, initial = {}, {}
+    for year in years:
+        path = cn_path(year)
+        if not path.exists():
+            continue
+        with zipfile.ZipFile(path) as z, z.open("cn.txt") as f:
+            for raw in f:
+                parts = raw.decode("utf-8", "replace").rstrip("\n").split("|")
+                if len(parts) <= CAND_PTY:
+                    continue
+                party = fold_party(parts[CAND_PTY])
+                if not party:
+                    continue
+                name = parts[CAND_NM]
+                if "," not in name:
+                    continue
+                surname_part, given_part = name.split(",", 1)
+                sur = re.sub(r"[^a-z\s]", " ", surname_part.lower()).split()
+                giv = re.sub(r"[^a-z\s]", " ", given_part.lower()).split()
+                giv = [g for g in giv if g not in _PERSON_BOILERPLATE]
+                if not sur or not giv:
+                    continue
+                last, first = sur[-1], giv[0]
+                full.setdefault(f"{first} {last}", set()).add(party)
+                initial.setdefault((last, first[0]), set()).add(party)
+    return full, initial
+
+
+def match_person_party(text, full, initial):
+    """Party for a person named in `text`, or None. Never surname-only.
+
+    Exact "first last" (unique party) wins; else first-initial + surname (unique
+    party) as a gated fallback for nicknames ("Jen Kiggans" -> J. Kiggans).
+    """
+    person = extract_person(text)
+    if not person:
+        return None
+    first, last = person
+    parties = full.get(f"{first} {last}")
+    if parties and len(parties) == 1:
+        return next(iter(parties))
+    parties = initial.get((last, first[0]))
+    if parties and len(parties) == 1:
+        return next(iter(parties))
+    return None
 
 
 def load_fec_party_map(years=CYCLES):

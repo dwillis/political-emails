@@ -8,8 +8,10 @@ from party_utils import (
     build_committee_party_map,
     committee_name_party,
     derive_committee_party,
+    extract_person,
     fold_party,
     majority_party,
+    match_person_party,
 )
 
 
@@ -80,3 +82,39 @@ def test_derive_committee_party():
     # name keyword only when the committee came from a disclaimer
     assert derive_committee_party("Democratic Party of Ohio", "disclaimer", lambda n: None, {}, {}) == ("D", "committee-name")
     assert derive_committee_party("Democratic Party of Ohio", "llm:x", lambda n: None, {}, {}) == (None, None)
+
+
+# --- candidate-name matching ---
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Team Kiggans", None),                        # single name token
+        ("Jen Kiggans", ("jen", "kiggans")),
+        ("Friends of Elizabeth Guzman", ("elizabeth", "guzman")),
+        ("Laura Loomer from LOOMER UNLEASHED", ("laura", "loomer")),
+        ("Dr. Scott Jensen for Governor", ("scott", "jensen")),
+        ("Roy Cooper for North Carolina", ("roy", "cooper")),
+        ("Donald Trump Jr.", None),                    # suffix -> unmatchable
+        ("Derrick Van Orden", ("derrick", "orden")),   # multiword surname -> last token
+        ("The White House", ("white", "house")),       # not a person, but 2 tokens
+    ],
+)
+def test_extract_person(text, expected):
+    assert extract_person(text) == expected
+
+
+def test_match_person_party():
+    full = {"jane doe": {"D"}, "sam smith": {"R"}, "pat lee": {"D", "R"}}
+    initial = {("doe", "j"): {"D"}, ("kiggans", "j"): {"R"},
+               ("smith", "s"): {"R"}, ("lee", "p"): {"D", "R"}}
+    # exact full name, unique party
+    assert match_person_party("Jane Doe", full, initial) == "D"
+    # nickname -> first-initial gate, unique surname+initial
+    assert match_person_party("Jen Kiggans", full, initial) == "R"
+    # ambiguous full name (two parties) -> None
+    assert match_person_party("Pat Lee", full, initial) is None
+    # no match at all
+    assert match_person_party("The White House", full, initial) is None
+    # suffix -> None (never collapses onto the base name)
+    assert match_person_party("Sam Smith Jr.", full, initial) is None

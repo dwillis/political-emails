@@ -197,6 +197,7 @@ precedence over the sender domain, since the committee is disclaimer-grounded.
 | `human` | set by a person during review (most authoritative) |
 | `override` | curated [`config/committee_party_overrides.csv`](config/committee_party_overrides.csv) (`NONE` blocks derivation) |
 | `fec` | FEC committee master, preferring the linked candidate's registered party across cycles |
+| `fec-candidate` | matched a person named in the committee/sender to the FEC candidate master (full name, or nickname via first-initial) |
 | `committee-name` | committee-name keyword (only for disclaimer/human/FEC-matched committees) |
 | `committee-majority` | dominant party of the committee's other emails (≥20 records, ≥95%) |
 | `domain-map` | [`config/domain_party_mapping.csv`](config/domain_party_mapping.csv) |
@@ -204,10 +205,26 @@ precedence over the sender domain, since the committee is disclaimer-grounded.
 | `null` | party is null |
 
 Precedence: `human > override > fec > committee-name > committee-majority >
-domain-map > platform`. Media/newsletter senders (Trump Train News, BizPac
-Review, …) stay null — `party` means the sender committee's affiliation, not a
-partisan lean. New emails get a provisional domain/platform party at collection;
-committee-derived party is applied at enrichment and by the sweep.
+fec-candidate > domain-map > platform`. `fec-candidate` and `domain-map` fill
+only null records (they never overwrite a stronger committee-derived label).
+Media/newsletter senders (Trump Train News, BizPac Review, …) stay null —
+`party` means the sender committee's affiliation, not a partisan lean. New
+emails get a provisional domain/platform party at collection; committee- and
+candidate-derived party is applied at enrichment and by the sweep.
+
+**Hand-curating the remainder.** After the sweep, the leftover party-null
+records are mostly media orgs (legitimately null) plus state-level candidates
+and blank-party JFCs the FEC files can't resolve. Generate a review CSV:
+
+```bash
+uv run python scripts/suggest_party_overrides.py   # -> state/validation/party_suggestions.csv
+```
+
+Paste accepted committee rows into
+[`config/committee_party_overrides.csv`](config/committee_party_overrides.csv)
+(`party,NONE` blocks a committee) and domain rows into
+[`config/domain_party_mapping.csv`](config/domain_party_mapping.csv) — the domain
+map is applied **retroactively** by the sweep — then rerun `apply_party_fixes.py`.
 
 **One-time sweep** — derives party from committees, fills nulls, corrects
 contradictions (rented-domain contamination), adds `party_source`; idempotent:

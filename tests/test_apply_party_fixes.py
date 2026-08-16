@@ -3,8 +3,9 @@
 from apply_party_fixes import make_record_fixer
 
 
-def fixer(committee_map=None, domain_map=None):
-    return make_record_fixer(committee_map or {}, domain_map or {})
+def fixer(committee_map=None, domain_map=None, cand_full=None, cand_initial=None):
+    return make_record_fixer(committee_map or {}, domain_map or {},
+                             cand_full or {}, cand_initial or {})
 
 
 def test_fill_from_committee_map():
@@ -65,3 +66,38 @@ def test_idempotent():
     tags2, _o, _n = fix(rec)
     assert tags2 - {"source_key_added"} == set()  # no content change on rerun
     assert "source_key_added" not in tags2         # key already present
+
+
+def test_fill_from_candidate_name():
+    # committee not in committee_map, but sender name matches a candidate
+    fix = fixer(cand_full={"jane doe": {"D"}}, cand_initial={("doe", "j"): {"D"}})
+    rec = {"committee": None, "name": "Jane Doe", "party": None, "body": ""}
+    tags, old, new = fix(rec)
+    assert new == "D" and rec["party_source"] == "fec-candidate"
+    assert "filled" in tags
+
+
+def test_candidate_does_not_overwrite_existing():
+    fix = fixer(cand_full={"jane doe": {"R"}}, cand_initial={})
+    rec = {"committee": None, "name": "Jane Doe", "party": "D",
+           "party_source": "domain-map", "body": ""}
+    fix(rec)
+    assert rec["party"] == "D"  # fill-only never overwrites
+
+
+def test_fill_from_domain_map_retroactive():
+    fix = fixer(domain_map={"foo.com": "D"})
+    rec = {"committee": None, "name": "News Digest", "party": None,
+           "domain": "FOO.com", "body": "", "urls": []}
+    tags, old, new = fix(rec)
+    assert new == "D" and rec["party_source"] == "domain-map" and "filled" in tags
+
+
+def test_candidate_fill_idempotent():
+    fix = fixer(cand_full={"jane doe": {"D"}}, cand_initial={("doe", "j"): {"D"}})
+    rec = {"committee": None, "name": "Jane Doe", "party": None, "body": ""}
+    fix(rec)
+    tags2, _o, _n = fix(rec)
+    assert tags2 - {"source_key_added"} == set()
+    assert "source_key_added" not in tags2
+    assert rec["party_source"] == "fec-candidate"

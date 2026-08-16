@@ -23,15 +23,18 @@ from party_utils import (
     build_committee_party_map,
     committee_name_party,  # noqa: F401 (kept for parity/testing imports)
     fold_party,
+    load_candidate_name_index,
     load_fec_party_map,
     load_party_overrides,
+    match_person_party,
 )
 from process_email import determine_party, load_domain_party_map
 from utils import CONFIG_DIR, DATA_DIR, load_jsonl, save_jsonl
 
 OVERRIDES_PATH = CONFIG_DIR / "committee_party_overrides.csv"
 DOMAIN_MAP_PATH = CONFIG_DIR / "domain_party_mapping.csv"
-INDEPENDENT_SOURCES = {None, "human", "override", "fec", "domain-map", "platform", "legacy"}
+INDEPENDENT_SOURCES = {None, "human", "override", "fec", "fec-candidate",
+                       "domain-map", "platform", "legacy"}
 
 
 def aggregate():
@@ -80,9 +83,47 @@ def build_map(committee_counts, name_eligible):
         committee_counts, fec_lookup, fec_party_map, overrides, name_eligible)
 
 
-def make_record_fixer(committee_map, domain_map):
+def make_record_fixer(committee_map, domain_map, cand_full, cand_initial):
+    def candidate_party(rec):
+        """Party from an FEC candidate named in the committee string or sender."""
+        for text in (rec.get("committee"), rec.get("name")):
+            if text:
+                p = match_person_party(text, cand_full, cand_initial)
+                if p:
+                    return p
+        return None
+
+    def derive_fill(rec):
+        """(party, source) to fill a null-party record, or (None, None).
+
+        FEC candidate name first, then the domain map / platform (determine_party).
+        Fill-only -- callers never let this overwrite an existing label.
+        """
+        cp = candidate_party(rec)
+        if cp:
+            return cp, "fec-candidate"
+        # Domain map is body-independent (a candidate's domain implies party even
+        # on a bodyless record); check it before the body-gated platform signal.
+        dom = (rec.get("domain") or "").strip().lower()
+        if dom in domain_map:
+            return domain_map[dom], "domain-map"
+        dp, ds = determine_party(rec.get("body") or "", rec.get("domain"),
+                                 domain_map, rec.get("urls"))
+        if dp:
+            return dp, ds
+        return None, None
+
     def reprovenance(rec, party):
-        """Independent-source provenance of an existing label (never majority)."""
+        """Independent-source provenance of an existing label (never majority).
+
+        Mirrors derive_fill's priority so a fec-candidate/domain-map fill re-tags
+        to the same source on re-run (idempotency).
+        """
+        if candidate_party(rec) == party:
+            return "fec-candidate"
+        dom = (rec.get("domain") or "").strip().lower()
+        if domain_map.get(dom) == party:
+            return "domain-map"
         dp, ds = determine_party(rec.get("body") or "", rec.get("domain"),
                                  domain_map, rec.get("urls"))
         return ds if dp == party else "legacy"
@@ -124,7 +165,11 @@ def make_record_fixer(committee_map, domain_map):
             elif party is not None:
                 new_party, new_source = party, reprovenance(rec, party)
             else:
-                new_party, new_source = None, None
+                # Null party, no committee-derived party: try candidate name /
+                # domain map (fill-only).
+                new_party, new_source = derive_fill(rec)
+                if new_party is not None:
+                    tags.add("filled")
 
         # Detect a provenance change even when the party value is unchanged
         # (e.g. an existing R record whose source becomes "fec").
@@ -154,7 +199,9 @@ def main():
     print(f"  committees mapped: {len(committee_map):,}  by source: {dict(src_dist)}")
 
     domain_map = load_domain_party_map(DOMAIN_MAP_PATH)
-    fix = make_record_fixer(committee_map, domain_map)
+    cand_full, cand_initial = load_candidate_name_index()
+    print(f"  candidate name index: {len(cand_full):,} full, {len(cand_initial):,} initial")
+    fix = make_record_fixer(committee_map, domain_map, cand_full, cand_initial)
 
     day_files = iter_day_files()
     if args.month:
@@ -164,6 +211,7 @@ def main():
         day_files = day_files[: args.limit_days]
 
     counts = Counter()
+    fills_by_source = Counter()
     files_changed = 0
     corrections = []
     null_before = null_after = 0
@@ -175,6 +223,8 @@ def main():
             tags, old_party, new_party = fix(rec)
             null_before += old_party is None
             null_after += new_party is None
+            if old_party is None and new_party is not None:
+                fills_by_source[rec.get("party_source")] += 1
             content = tags - {"source_key_added"}
             if content:
                 changed = True
@@ -198,6 +248,9 @@ def main():
     for tag in ("source_key_added", "filled", "corrected", "retagged", "folded"):
         print(f"  {tag:16} {counts[tag]:,}")
     print(f"  null party: {null_before:,} -> {null_after:,}")
+    if fills_by_source:
+        print("  fills by source: " + ", ".join(
+            f"{s}={n:,}" for s, n in fills_by_source.most_common()))
     if corrections:
         print("\n  sample corrections (committee: old -> new):")
         for date, email, com, old, new in corrections[:15]:
