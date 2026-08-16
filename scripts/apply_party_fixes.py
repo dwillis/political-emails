@@ -188,6 +188,7 @@ def make_record_fixer(committee_map, domain_map, cand_full, cand_initial):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--year", help="Limit to YYYY")
     parser.add_argument("--month", help="Limit to YYYY-MM")
     parser.add_argument("--limit-days", type=int, default=None)
     args = parser.parse_args()
@@ -204,6 +205,8 @@ def main():
     fix = make_record_fixer(committee_map, domain_map, cand_full, cand_initial)
 
     day_files = iter_day_files()
+    if args.year:
+        day_files = [p for p in day_files if p.stem.startswith(f"{args.year}-")]
     if args.month:
         y, m = args.month.split("-")
         day_files = [p for p in day_files if p.stem.startswith(f"{y}-{m}")]
