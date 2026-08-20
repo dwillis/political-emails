@@ -2,16 +2,17 @@
 
 Scans daily JSONL files for records without a committee (null/missing) and runs
 each one through scripts/identify_committee.py, which first parses the
-"Paid for by ..." disclaimer deterministically and falls back to a local LLM
-(via DSPy + Ollama) only when that fails. Results are written back to the
-archive. Intended to be run manually each month -- deliberately NOT in GitHub
-Actions.
+"Paid for by ..." disclaimer deterministically and falls back to an LLM
+(via DSPy + SiliconFlow's OpenAI-compatible API) only when that fails. Results
+are written back to the archive. Intended to be run manually each month --
+deliberately NOT in GitHub Actions.
 
     uv run --group enrich python scripts/enrich_committees.py --month 2026-02
     uv run --group enrich python scripts/enrich_committees.py --since 2026-02-01 --until 2026-02-28
 
-Requires DSPy and a running Ollama (https://ollama.com) with the target model
-pulled (e.g. `ollama pull qwen3:4b`).
+Requires DSPy and a SiliconFlow API key in SILICONFLOW_API_KEY (or --api-key).
+Point --api-base at a local Ollama (http://localhost:11434) to use a local model
+instead.
 
 Resumability: each day file is rewritten as soon as it finishes, so a crash
 loses at most the in-progress day, and re-running skips records already filled.
@@ -21,6 +22,7 @@ re-running a month retries any records still unresolved.
 
 import argparse
 import gc
+import os
 import resource
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,14 +31,16 @@ from datetime import date, timedelta
 from committee_utils import needs_committee, normalize_committee
 from utils import DATA_DIR, load_jsonl, save_jsonl
 
-DEFAULT_MODEL = "qwen3:4b"
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_MODEL = "Qwen/Qwen3.5-9B"
+DEFAULT_API_BASE = "https://api.siliconflow.com/v1"
+API_KEY_ENV = "SILICONFLOW_API_KEY"
+OLLAMA_URL = "http://localhost:11434"
 
 
 def raise_fd_limit(target=16384):
     """Raise the open-file soft limit.
 
-    litellm/Ollama leak ~1-2 file descriptors per call (a new asyncio event loop
+    litellm leaks ~1-2 file descriptors per call (a new asyncio event loop
     + httpx pool per request), and macOS's default soft limit is only 256, so a
     long enrichment run hits "Too many open files" after ~150 calls. Don't rely
     on the caller's shell ulimit -- raise it in-process.
@@ -51,20 +55,42 @@ def raise_fd_limit(target=16384):
         pass
 
 
-def configure_dspy(model, ollama_url, disable_thinking=True):
-    """Point DSPy at a local Ollama model for the module's LLM fallback.
+def is_ollama(api_base):
+    """True if the base URL looks like a local Ollama rather than SiliconFlow."""
+    return "11434" in api_base or "localhost" in api_base or "127.0.0.1" in api_base
+
+
+def configure_dspy(model, api_base=DEFAULT_API_BASE, disable_thinking=True, api_key=None):
+    """Point DSPy at the LLM used for the module's fallback.
+
+    SiliconFlow (the default) speaks the OpenAI chat API, so it goes through
+    litellm's "openai/" provider with an explicit api_base. A localhost/11434
+    api_base switches to Ollama instead, which keeps eval_committees.py and
+    optimize_fallback.py working against a local model.
 
     Reasoning ("thinking") models are ~200x slower here and mangle the
-    structured output, so thinking is disabled by default. This requires a
-    thinking-capable model (e.g. qwen3:4b); pass disable_thinking=False for a
-    plain instruct model that doesn't accept Ollama's `think` parameter.
+    structured output, so thinking is disabled by default: SiliconFlow takes
+    `enable_thinking: false` in the request body, Ollama takes `think: false`.
+    Pass disable_thinking=False for a plain instruct model that rejects those.
     """
     import dspy
 
-    kwargs = {"api_base": ollama_url}
-    if disable_thinking:
-        kwargs["think"] = False
-    lm = dspy.LM(f"ollama_chat/{model}", **kwargs)
+    if is_ollama(api_base):
+        kwargs = {"api_base": api_base}
+        if disable_thinking:
+            kwargs["think"] = False
+        lm = dspy.LM(f"ollama_chat/{model}", **kwargs)
+    else:
+        key = api_key or os.environ.get(API_KEY_ENV)
+        if not key:
+            sys.exit(f"No API key: set {API_KEY_ENV} or pass --api-key "
+                     f"(or use --api-base {OLLAMA_URL} for a local Ollama).")
+        kwargs = {"api_base": api_base, "api_key": key}
+        if disable_thinking:
+            # Qwen3 hybrid-thinking models on SiliconFlow: non-OpenAI params
+            # have to ride along in extra_body.
+            kwargs["extra_body"] = {"enable_thinking": False}
+        lm = dspy.LM(f"openai/{model}", **kwargs)
     dspy.configure(lm=lm)
     raise_fd_limit()
 
@@ -96,7 +122,7 @@ def resolve_range(args):
 
 
 def is_connection_error(exc):
-    """True if the exception looks like Ollama being unreachable."""
+    """True if the exception looks like the LLM endpoint being unreachable."""
     text = str(exc).lower()
     return any(s in text for s in ("connection", "connect", "refused", "max retries"))
 
@@ -151,23 +177,27 @@ def main():
     group.add_argument("--month", help="YYYY-MM to process")
     group.add_argument("--since", help="YYYY-MM-DD start (inclusive)")
     group.add_argument("--until", help="YYYY-MM-DD end (inclusive)")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Ollama model tag for the LLM fallback")
-    parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="Model id for the LLM fallback")
+    parser.add_argument("--api-base", default=DEFAULT_API_BASE,
+                        help=f"OpenAI-compatible base URL (default SiliconFlow; use {OLLAMA_URL} for local Ollama)")
+    parser.add_argument("--api-key", default=None, help=f"API key (default: ${API_KEY_ENV})")
     parser.add_argument("--limit", type=int, default=None, help="Max records to process (for testing)")
-    parser.add_argument("--workers", type=int, default=1, help="Concurrent LLM workers per day (needs OLLAMA_NUM_PARALLEL>1 to help)")
+    parser.add_argument("--workers", type=int, default=1, help="Concurrent LLM workers per day (for Ollama, also set OLLAMA_NUM_PARALLEL>1)")
     parser.add_argument("--allow-thinking", action="store_true", help="Don't disable model reasoning (needed for non-thinking instruct models)")
     parser.add_argument("--skip-party", action="store_true", help="Don't derive party when filling committees")
     parser.add_argument("--dry-run", action="store_true", help="Identify but don't write files")
     args = parser.parse_args()
 
-    configure_dspy(args.model, args.ollama_url, disable_thinking=not args.allow_thinking)
+    configure_dspy(args.model, args.api_base, disable_thinking=not args.allow_thinking,
+                   api_key=args.api_key)
     # Import after imports so a missing dspy fails inside configure_dspy above.
     from identify_committee import IdentifyCommitteeModule
 
     module = IdentifyCommitteeModule()
     derive_party = None if args.skip_party else build_party_deriver()
     start, end = resolve_range(args)
-    print(f"Enriching committees for {start} .. {end} (LLM fallback: Ollama '{args.model}')")
+    backend = "Ollama" if is_ollama(args.api_base) else "SiliconFlow"
+    print(f"Enriching committees for {start} .. {end} (LLM fallback: {backend} '{args.model}')")
 
     processed = 0
     filled = 0
@@ -199,8 +229,8 @@ def main():
             processed += 1
             if exc is not None:
                 if is_connection_error(exc):
-                    sys.exit(f"LLM call failed ({args.ollama_url}, model '{args.model}'): {exc}\n"
-                             "Is Ollama running and the model pulled?")
+                    sys.exit(f"LLM call failed ({args.api_base}, model '{args.model}'): {exc}\n"
+                             "Check network access and the API base URL/model id.")
                 print(f"  [error] {path.stem} {rec.get('email')}: {exc}")
                 errors += 1
                 return
