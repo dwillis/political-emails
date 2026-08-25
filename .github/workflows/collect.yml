@@ -50,5 +50,18 @@ jobs:
             DATE=$(date +%Y-%m-%d)
             NEW=$(git diff --staged --numstat data/ | awk '{s+=$1} END {print s+0}')
             git commit -m "Update emails ${DATE} (+${NEW} lines)"
-            git push
+            # Retry push, rebasing onto any concurrent updates to the branch
+            pushed=false
+            for attempt in 1 2 3 4 5; do
+              if git push; then
+                pushed=true
+                break
+              fi
+              echo "Push failed (attempt ${attempt}), rebasing on remote and retrying..."
+              git pull --rebase origin main
+            done
+            if [ "$pushed" != "true" ]; then
+              echo "::error::Failed to push after 5 attempts"
+              exit 1
+            fi
           fi
