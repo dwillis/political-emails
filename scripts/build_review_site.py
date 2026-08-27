@@ -31,6 +31,49 @@ def cap_body(body):
     return body[:half] + "\n\n[... truncated ...]\n\n" + body[-half:]
 
 
+def collect_party(records, min_records=1):
+    """Group party-null records by committee for party review.
+
+    `records` is any iterable of record dicts. Returns committee summaries
+    (highest party-null count first), each with a representative (most recent)
+    email, filtered to count >= min_records.
+    """
+    groups = {}
+    for rec in records:
+        if rec.get("party") is not None:
+            continue
+        committee = rec.get("committee")
+        if not committee:
+            continue
+        g = groups.get(committee)
+        if g is None:
+            g = groups[committee] = {"committee": committee, "count": 0, "rep": None}
+        g["count"] += 1
+        rep = g["rep"]
+        if rep is None or (rec.get("date") or "") >= (rep.get("date") or ""):
+            g["rep"] = rec
+
+    out = []
+    for g in groups.values():
+        if g["count"] < min_records:
+            continue
+        rep = g["rep"] or {}
+        det = extract_committee(rep.get("body") or "")
+        out.append({
+            "committee": g["committee"],
+            "count": g["count"],
+            "date": rep.get("date"),
+            "name": rep.get("name"),
+            "email": rep.get("email"),
+            "domain": rep.get("domain"),
+            "subject": rep.get("subject"),
+            "body": cap_body(rep.get("body") or ""),
+            "disclaimer_says": det if (det and looks_confident(det)) else "",
+        })
+    out.sort(key=lambda r: r["count"], reverse=True)
+    return out
+
+
 def collect(reason_filter, skip_fec):
     fec_exact = (lambda _c: False)
     if not skip_fec:
