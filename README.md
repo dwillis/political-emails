@@ -165,6 +165,19 @@ uv run python scripts/apply_committee_fixes.py
 uv run python scripts/fec_match.py            # writes state/fec/fec_matches.csv
 ```
 
+**Persisting the FEC ID** — [`scripts/backfill_fec_ids.py`](scripts/backfill_fec_ids.py)
+stores each record's exact FEC committee ID as `committee_fec_id` (or `null` when
+there's no committee or no exact match). This gives every federal committee a
+canonical identity, so downstream aggregation (e.g. the sender-mention tracker)
+groups name variants — `"Trump National Committee JFC, Inc."` vs `"...JFC Inc"` —
+that resolve to the same real committee. Idempotent; the daily collection workflow
+runs it automatically.
+
+```bash
+uv run python scripts/backfill_fec_ids.py --dry-run   # report only
+uv run python scripts/backfill_fec_ids.py             # write committee_fec_id
+```
+
 **Validation report** — tiers every labeled record and builds a review queue:
 
 ```bash
@@ -324,6 +337,7 @@ Each line in a JSONL file is a JSON record with these fields:
 | `urls` | array | URLs found in the email body |
 | `committee` | string/null | Political committee that sent the email (LLM-extracted; `null` when unknown or not yet determined) |
 | `committee_source` | string/null | How `committee` was derived: `disclaimer`, `llm:<model>`, `backfill`, or `null` |
+| `committee_fec_id` | string/null | Canonical FEC committee ID from an exact name match (see FEC cross-reference); `null` when no committee or no match |
 | `party_source` | string/null | How `party` was derived (see Party derivation below) |
 
 ## Automation

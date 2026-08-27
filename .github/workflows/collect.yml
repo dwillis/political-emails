@@ -39,6 +39,11 @@ jobs:
             uv run python collect_emails.py
           fi
 
+      - name: Backfill FEC committee IDs
+        run: |
+          cd scripts
+          uv run python backfill_fec_ids.py
+
       - name: Commit data
         run: |
           git config user.name "github-actions[bot]"

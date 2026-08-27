@@ -293,6 +293,31 @@ def test_compute_sender_mentions_merges_committee_name_variants(tmp_path, monkey
     assert row["committee"] == "Trump National Committee JFC, Inc."
 
 
+def test_compute_sender_mentions_groups_by_fec_id_across_string_variants(tmp_path, monkeypatch):
+    # These two spellings differ by a comma, so committee_key alone keeps them
+    # apart; a shared committee_fec_id must still merge them into one entity.
+    _write_jsonl(tmp_path / "2026" / "01" / "2026-01-06.jsonl", [
+        {"committee": "Trump National Committee JFC, Inc.", "committee_fec_id": "C00873893",
+         "disclaimer": True, "party": "R", "subject": "Trump", "clean_body": ""},
+        {"committee": "Trump National Committee JFC, Inc.", "committee_fec_id": "C00873893",
+         "disclaimer": True, "party": "R", "subject": "Trump", "clean_body": ""},
+        {"committee": "Trump National Committee JFC Inc", "committee_fec_id": "C00873893",
+         "disclaimer": True, "party": "R", "subject": "nothing", "clean_body": ""},
+    ])
+    import build_site
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+    people = {"trump": {"name": "Donald Trump", "patterns": [r"\bTrump\b"]}}
+
+    weekly = compute_sender_mentions(build_site.scan_data(), people)["people"]["trump"]["weekly"]
+
+    # All three collapse under the shared FEC ID despite the comma difference.
+    assert len(weekly) == 1
+    assert weekly[0]["total_emails"] == 3
+    assert weekly[0]["matching_emails"] == 2
+    # Display uses the most common raw spelling behind that ID.
+    assert weekly[0]["committee"] == "Trump National Committee JFC, Inc."
+
+
 def test_compute_stats_includes_sender_mentions_in_its_single_scan(tmp_path, monkeypatch):
     _write_jsonl(tmp_path / "2026" / "01" / "2026-01-05.jsonl", [{
         "committee": "Committee A", "disclaimer": True, "party": "R",

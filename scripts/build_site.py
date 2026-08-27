@@ -16,7 +16,7 @@ from html import escape
 from pathlib import Path
 
 from utils import DATA_DIR, CONFIG_DIR, count_records
-from committee_utils import committee_key
+from committee_utils import committee_group_key
 from charts import (
     vertical_bar_chart,
     stacked_bar_chart,
@@ -293,7 +293,7 @@ def _add_sender_mention(tracker, rec, date_key):
     committee = rec.get("committee")
     if not rec.get("disclaimer") or not committee:
         return
-    key = committee_key(committee)
+    key = committee_group_key(rec)
     if not key:
         return
     display[key][str(committee).strip()] += 1

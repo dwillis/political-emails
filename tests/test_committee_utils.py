@@ -6,6 +6,7 @@ import pytest
 
 from committee_utils import (
     build_committee_map,
+    committee_group_key,
     committee_key,
     join_key,
     needs_committee,
@@ -98,6 +99,16 @@ def test_committee_key_keeps_internal_punctuation_and_leading_the():
     assert committee_key("D.S.C.C.") != committee_key("DSCC")
     assert committee_key("The Collective PAC") != committee_key("Collective PAC")
     assert committee_key(None) == ""
+
+
+def test_committee_group_key_prefers_fec_id_then_falls_back_to_name():
+    # A shared FEC ID unifies variants that committee_key would keep apart.
+    a = {"committee": "Trump National Committee JFC, Inc.", "committee_fec_id": "C00873893"}
+    b = {"committee": "Trump National Committee JFC Inc", "committee_fec_id": "C00873893"}
+    assert committee_group_key(a) == committee_group_key(b) == "fec:C00873893"
+    # No FEC ID -> fall back to the normalized name key.
+    assert committee_group_key({"committee": "Some State PAC"}) == committee_key("Some State PAC")
+    assert committee_group_key({"committee": None}) == ""
 
 
 def test_same_committee_variants():
