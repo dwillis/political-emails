@@ -243,6 +243,17 @@ Paste accepted committee rows into
 [`config/domain_party_mapping.csv`](config/domain_party_mapping.csv) — the domain
 map is applied **retroactively** by the sweep — then rerun `apply_party_fixes.py`.
 
+**Interactive party review** — instead of (or alongside) the suggestions CSV,
+review party-null committees one card at a time and assign a party by keyboard:
+
+    uv run python scripts/build_review_site.py --mode party   # -> state/validation/review.html
+
+One card per committee (highest party-null volume first; raise the floor with
+`--min-records N`). Keys: `D`/`R`/`I`/`G` assign a party, `N` blocks derivation
+(`NONE`), `S` skips. "Export overrides CSV" downloads rows in the
+[`config/committee_party_overrides.csv`](config/committee_party_overrides.csv)
+schema — paste the accepted rows in and rerun `apply_party_fixes.py`.
+
 **One-time sweep** — derives party from committees, fills nulls, corrects
 contradictions (rented-domain contamination), adds `party_source`; idempotent:
 
