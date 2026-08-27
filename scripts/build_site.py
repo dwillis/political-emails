@@ -1326,8 +1326,16 @@ function renderChart(rows, weeks) {{
   if (!weeks.length) {{ svg.innerHTML = '<text x="400" y="140" text-anchor="middle">No qualifying emails in this period.</text>'; return; }}
   const left = 45, top = 20, width = 730, height = 210;
   const max = Math.max(5, Math.ceil(Math.max(...values) / 5) * 5);
-  const points = values.map((v, i) => `${{left + (weeks.length === 1 ? width / 2 : i * width / (weeks.length - 1))}},${{top + height - (v / max) * height}}`).join(' ');
-  svg.innerHTML = `<line x1="${{left}}" y1="${{top + height}}" x2="${{left + width}}" y2="${{top + height}}" stroke="#aaa"/><line x1="${{left}}" y1="${{top}}" x2="${{left}}" y2="${{top + height}}" stroke="#aaa"/><polyline points="${{points}}" fill="none" stroke="{ACCENT}" stroke-width="3"/><text x="${{left}}" y="15" font-size="12">% of qualifying emails mentioning this person</text><text x="5" y="${{top + 5}}" font-size="11">${{max}}%</text><text x="10" y="${{top + height}}" font-size="11">0%</text><text x="${{left}}" y="${{top + height + 22}}" font-size="11">${{weeks[0]}}</text><text x="${{left + width}}" y="${{top + height + 22}}" text-anchor="end" font-size="11">${{weeks[weeks.length - 1]}}</text>`;
+  const xAt = i => left + (weeks.length === 1 ? width / 2 : i * width / (weeks.length - 1));
+  const points = values.map((v, i) => `${{xAt(i)}},${{top + height - (v / max) * height}}`).join(' ');
+  const tickCount = Math.min(weeks.length, 6);
+  const tickIdx = [...new Set(Array.from({{length: tickCount}}, (_, k) =>
+    tickCount === 1 ? 0 : Math.round(k * (weeks.length - 1) / (tickCount - 1))))];
+  const xLabels = tickIdx.map(i => {{
+    const anchor = i === 0 ? 'start' : i === weeks.length - 1 ? 'end' : 'middle';
+    return `<line x1="${{xAt(i)}}" y1="${{top + height}}" x2="${{xAt(i)}}" y2="${{top + height + 4}}" stroke="#aaa"/><text x="${{xAt(i)}}" y="${{top + height + 22}}" text-anchor="${{anchor}}" font-size="11">${{weeks[i]}}</text>`;
+  }}).join('');
+  svg.innerHTML = `<line x1="${{left}}" y1="${{top + height}}" x2="${{left + width}}" y2="${{top + height}}" stroke="#aaa"/><line x1="${{left}}" y1="${{top}}" x2="${{left}}" y2="${{top + height}}" stroke="#aaa"/><polyline points="${{points}}" fill="none" stroke="{ACCENT}" stroke-width="3"/><text x="${{left}}" y="15" font-size="12">% of qualifying emails mentioning this person</text><text x="5" y="${{top + 5}}" font-size="11">${{max}}%</text><text x="10" y="${{top + height}}" font-size="11">0%</text>${{xLabels}}`;
 }}
 function render() {{
   const {{rows, weeks}} = selectedRows();
