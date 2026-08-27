@@ -355,14 +355,14 @@ let decisions = JSON.parse(localStorage.getItem(KEY) || "{}");
 let idx = 0;
 
 function esc(s){ return (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
-function hi(body, disc) {
+function hi(body) {
   let h = esc(body);
   const pfb = /(paid for (and authorized )?by[^\n]{0,140})/i;
   h = h.replace(pfb, '<mark class="disc">$1</mark>');
   return h;
 }
 function save(){ localStorage.setItem(KEY, JSON.stringify(decisions)); render(); }
-function decide(cmte, party){ decisions[cmte] = {party}; if (idx < RECORDS.length-1) idx++; save(); }
+function decide(i, party){ const cmte = RECORDS[i].committee; decisions[cmte] = {party}; if (idx < RECORDS.length-1) idx++; save(); }
 
 function render(){
   const done = RECORDS.filter(r => decisions[r.committee]).length;
@@ -382,21 +382,20 @@ function render(){
       </div>
       <div class="subject">${esc(r.subject)}</div>
       <div class="meta">${esc(r.name)} &lt;${esc(r.email)}&gt;</div>
-      <pre class="body">${hi(r.body, r.disclaimer_says)}</pre>
+      <pre class="body">${hi(r.body)}</pre>
       <div class="actions">
-        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','D')">Democratic <kbd>D</kbd></button>
-        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','R')">Republican <kbd>R</kbd></button>
-        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','I')">Independent <kbd>I</kbd></button>
-        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','G')">Green <kbd>G</kbd></button>
-        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','NONE')">Block <kbd>N</kbd></button>
-        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','skip')">Skip <kbd>S</kbd></button>
+        <button onclick="decide(${idx},'D')">Democratic <kbd>D</kbd></button>
+        <button onclick="decide(${idx},'R')">Republican <kbd>R</kbd></button>
+        <button onclick="decide(${idx},'I')">Independent <kbd>I</kbd></button>
+        <button onclick="decide(${idx},'G')">Green <kbd>G</kbd></button>
+        <button onclick="decide(${idx},'NONE')">Block <kbd>N</kbd></button>
+        <button onclick="decide(${idx},'skip')">Skip <kbd>S</kbd></button>
         <span class="done">${d ? '✓ '+d.party : ''}</span>
       </div>
       <div class="hint"><kbd>&larr;</kbd>/<kbd>&rarr;</kbd> navigate &middot; ${idx+1} of ${RECORDS.length}</div>
     </div>`;
 }
 function exportCSV(){
-  // overrides schema: committee,party,note
   const rows = [["committee","party","note"]];
   RECORDS.forEach(r => {
     const d = decisions[r.committee];
@@ -409,15 +408,15 @@ function exportCSV(){
 }
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") return;
-  if (!RECORDS.length) return; const r = RECORDS[idx];
+  if (!RECORDS.length) return;
   if (e.key === "ArrowRight") { if (idx<RECORDS.length-1) idx++; render(); }
   else if (e.key === "ArrowLeft") { if (idx>0) idx--; render(); }
-  else if (e.key.toLowerCase() === "d") decide(r.committee,"D");
-  else if (e.key.toLowerCase() === "r") decide(r.committee,"R");
-  else if (e.key.toLowerCase() === "i") decide(r.committee,"I");
-  else if (e.key.toLowerCase() === "g") decide(r.committee,"G");
-  else if (e.key.toLowerCase() === "n") decide(r.committee,"NONE");
-  else if (e.key.toLowerCase() === "s") decide(r.committee,"skip");
+  else if (e.key.toLowerCase() === "d") decide(idx,"D");
+  else if (e.key.toLowerCase() === "r") decide(idx,"R");
+  else if (e.key.toLowerCase() === "i") decide(idx,"I");
+  else if (e.key.toLowerCase() === "g") decide(idx,"G");
+  else if (e.key.toLowerCase() === "n") decide(idx,"NONE");
+  else if (e.key.toLowerCase() === "s") decide(idx,"skip");
 });
 render();
 </script>

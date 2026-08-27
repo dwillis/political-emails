@@ -1,6 +1,6 @@
 """Tests for party-review collection in build_review_site."""
 
-from build_review_site import collect_party
+from build_review_site import collect_party, render_party
 
 
 def _rec(committee, party, date, body=""):
@@ -38,9 +38,6 @@ def test_collect_party_respects_min_records():
     assert [r["committee"] for r in out] == ["Big Cmte"]
 
 
-from build_review_site import render_party
-
-
 def test_render_party_embeds_data_and_schema():
     html = render_party([{
         "committee": "Acme for Congress", "count": 3, "date": "2026-03-01",
@@ -49,5 +46,5 @@ def test_render_party_embeds_data_and_schema():
     }])
     assert "Acme for Congress" in html            # data injected
     assert "/*__DATA__*/" not in html             # placeholder replaced
-    assert "committee,party,note" in html         # export schema present
+    assert '["committee","party","note"]' in html  # export schema present
     assert "party_review_decisions_v1" in html    # separate localStorage key
