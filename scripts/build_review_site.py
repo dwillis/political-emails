@@ -121,6 +121,11 @@ def render(records):
     return PAGE.replace("/*__DATA__*/", data)
 
 
+def render_party(records):
+    data = json.dumps(records, ensure_ascii=False)
+    return PARTY_PAGE.replace("/*__DATA__*/", data)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reason", help="Only include this SUSPECT reason")
@@ -271,6 +276,135 @@ document.addEventListener("keydown", e => {
 const sel = document.getElementById("filter");
 reasons().forEach(x => { const o = document.createElement("option"); o.value=x; o.textContent=x; sel.appendChild(o); });
 sel.onchange = () => { filter = sel.value; idx = 0; render(); };
+render();
+</script>
+</body>
+</html>"""
+
+
+PARTY_PAGE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Committee party review</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --mut:#666; --card:#f6f7f9;
+          --line:#dcdfe4; --hi:#fde68a; --hi2:#bbf7d0; --acc:#2563eb; }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg:#0f1115; --fg:#e7e9ee; --mut:#9aa2b1; --card:#171a21; --line:#2a2f3a;
+    --hi:#7c6f1f; --hi2:#1f5133; --acc:#5b8cff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line);
+           padding:10px 16px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header b { font-size:16px; }
+  .bar { flex:1; height:8px; background:var(--card); border-radius:4px; overflow:hidden; min-width:120px; }
+  .bar > div { height:100%; background:var(--acc); width:0; }
+  button { font:inherit; padding:6px 12px; border:1px solid var(--line); background:var(--card);
+           color:var(--fg); border-radius:6px; cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  main { max-width:920px; margin:0 auto; padding:16px; }
+  .card { border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .meta { color:var(--mut); font-size:13px; margin-bottom:6px; }
+  .subject { font-weight:600; margin-bottom:12px; }
+  .labels { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .chip { padding:6px 10px; border-radius:8px; background:var(--card); border:1px solid var(--line); }
+  .chip .k { color:var(--mut); font-size:12px; display:block; }
+  .chip.stored { background:var(--hi); }
+  .chip.disc { background:var(--hi2); }
+  pre.body { white-space:pre-wrap; word-break:break-word; background:var(--card);
+             border:1px solid var(--line); border-radius:8px; padding:12px; max-height:340px;
+             overflow:auto; font-size:13px; }
+  mark { background:var(--hi); padding:0 2px; }
+  mark.disc { background:var(--hi2); }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; align-items:center; }
+  .actions .done { color:var(--mut); }
+  kbd { font:12px monospace; background:var(--card); border:1px solid var(--line);
+        border-radius:4px; padding:0 4px; }
+  .hint { color:var(--mut); font-size:12px; margin-top:8px; }
+  .empty { text-align:center; color:var(--mut); padding:60px 0; }
+</style>
+</head>
+<body>
+<header>
+  <b>Committee party review</b>
+  <span id="counter" class="meta"></span>
+  <div class="bar"><div id="prog"></div></div>
+  <button onclick="exportCSV()">Export overrides CSV</button>
+</header>
+<main id="main"></main>
+<script>
+const RECORDS = /*__DATA__*/;
+const KEY = "party_review_decisions_v1";
+let decisions = JSON.parse(localStorage.getItem(KEY) || "{}");
+let idx = 0;
+
+function esc(s){ return (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function hi(body, disc) {
+  let h = esc(body);
+  const pfb = /(paid for (and authorized )?by[^\n]{0,140})/i;
+  h = h.replace(pfb, '<mark class="disc">$1</mark>');
+  return h;
+}
+function save(){ localStorage.setItem(KEY, JSON.stringify(decisions)); render(); }
+function decide(cmte, party){ decisions[cmte] = {party}; if (idx < RECORDS.length-1) idx++; save(); }
+
+function render(){
+  const done = RECORDS.filter(r => decisions[r.committee]).length;
+  document.getElementById("counter").textContent = `${done} / ${RECORDS.length} reviewed`;
+  document.getElementById("prog").style.width = RECORDS.length ? (100*done/RECORDS.length)+"%" : "0";
+  const main = document.getElementById("main");
+  if (!RECORDS.length){ main.innerHTML = '<div class="empty">No party-null committees.</div>'; return; }
+  if (idx >= RECORDS.length) idx = RECORDS.length-1;
+  const r = RECORDS[idx];
+  const d = decisions[r.committee];
+  main.innerHTML = `
+    <div class="card">
+      <div class="meta">${esc(r.date)} &middot; ${esc(r.domain)} &middot; <b>${r.count}</b> party-null email(s)</div>
+      <div class="labels">
+        <div class="chip stored"><span class="k">committee</span>${esc(r.committee)}</div>
+        ${r.disclaimer_says ? `<div class="chip disc"><span class="k">disclaimer says</span>${esc(r.disclaimer_says)}</div>` : ``}
+      </div>
+      <div class="subject">${esc(r.subject)}</div>
+      <div class="meta">${esc(r.name)} &lt;${esc(r.email)}&gt;</div>
+      <pre class="body">${hi(r.body, r.disclaimer_says)}</pre>
+      <div class="actions">
+        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','D')">Democratic <kbd>D</kbd></button>
+        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','R')">Republican <kbd>R</kbd></button>
+        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','I')">Independent <kbd>I</kbd></button>
+        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','G')">Green <kbd>G</kbd></button>
+        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','NONE')">Block <kbd>N</kbd></button>
+        <button onclick="decide('${esc(r.committee).replace(/'/g,"\\'")}','skip')">Skip <kbd>S</kbd></button>
+        <span class="done">${d ? '✓ '+d.party : ''}</span>
+      </div>
+      <div class="hint"><kbd>&larr;</kbd>/<kbd>&rarr;</kbd> navigate &middot; ${idx+1} of ${RECORDS.length}</div>
+    </div>`;
+}
+function exportCSV(){
+  // overrides schema: committee,party,note
+  const rows = [["committee","party","note"]];
+  RECORDS.forEach(r => {
+    const d = decisions[r.committee];
+    if (d && d.party !== "skip") rows.push([r.committee, d.party, `review: ${r.count} party-null emails`]);
+  });
+  const csv = rows.map(row => row.map(c => '"'+String(c==null?"":c).replace(/"/g,'""')+'"').join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv"}));
+  a.download = "committee_party_overrides_additions.csv"; a.click();
+}
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  if (!RECORDS.length) return; const r = RECORDS[idx];
+  if (e.key === "ArrowRight") { if (idx<RECORDS.length-1) idx++; render(); }
+  else if (e.key === "ArrowLeft") { if (idx>0) idx--; render(); }
+  else if (e.key.toLowerCase() === "d") decide(r.committee,"D");
+  else if (e.key.toLowerCase() === "r") decide(r.committee,"R");
+  else if (e.key.toLowerCase() === "i") decide(r.committee,"I");
+  else if (e.key.toLowerCase() === "g") decide(r.committee,"G");
+  else if (e.key.toLowerCase() === "n") decide(r.committee,"NONE");
+  else if (e.key.toLowerCase() === "s") decide(r.committee,"skip");
+});
 render();
 </script>
 </body>
