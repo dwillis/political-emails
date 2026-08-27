@@ -1328,7 +1328,9 @@ function renderChart(rows, weeks) {{
   const max = Math.max(5, Math.ceil(Math.max(...values) / 5) * 5);
   const xAt = i => left + (weeks.length === 1 ? width / 2 : i * width / (weeks.length - 1));
   const points = values.map((v, i) => `${{xAt(i)}},${{top + height - (v / max) * height}}`).join(' ');
-  const tickCount = Math.min(weeks.length, 6);
+  // ~1 label per 16 weeks, at least 6 (the 52-week view) and at most 10 so the
+  // long all-time span gets denser labels without crowding.
+  const tickCount = Math.min(weeks.length, Math.max(6, Math.min(10, Math.round(weeks.length / 16))));
   const tickIdx = [...new Set(Array.from({{length: tickCount}}, (_, k) =>
     tickCount === 1 ? 0 : Math.round(k * (weeks.length - 1) / (tickCount - 1))))];
   const xLabels = tickIdx.map(i => {{
