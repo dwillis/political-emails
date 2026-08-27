@@ -1333,9 +1333,11 @@ function renderChart(rows, weeks) {{
   const tickCount = Math.min(weeks.length, Math.max(6, Math.min(10, Math.round(weeks.length / 16))));
   const tickIdx = [...new Set(Array.from({{length: tickCount}}, (_, k) =>
     tickCount === 1 ? 0 : Math.round(k * (weeks.length - 1) / (tickCount - 1))))];
+  const MONTHS = ['Jan.', 'Feb.', 'Mar.', 'Apr.', 'May', 'Jun.', 'Jul.', 'Aug.', 'Sep.', 'Oct.', 'Nov.', 'Dec.'];
+  const fmtWeek = w => {{ const p = w.split('-'); return `${{MONTHS[+p[1] - 1]}} ${{p[0]}}`; }};
   const xLabels = tickIdx.map(i => {{
-    const anchor = i === 0 ? 'start' : i === weeks.length - 1 ? 'end' : 'middle';
-    return `<line x1="${{xAt(i)}}" y1="${{top + height}}" x2="${{xAt(i)}}" y2="${{top + height + 4}}" stroke="#aaa"/><text x="${{xAt(i)}}" y="${{top + height + 22}}" text-anchor="${{anchor}}" font-size="11">${{weeks[i]}}</text>`;
+    const x = xAt(i), y = top + height + 15;
+    return `<line x1="${{x}}" y1="${{top + height}}" x2="${{x}}" y2="${{top + height + 4}}" stroke="#aaa"/><text x="${{x}}" y="${{y}}" text-anchor="end" transform="rotate(-30 ${{x}} ${{y}})" font-size="11">${{fmtWeek(weeks[i])}}</text>`;
   }}).join('');
   svg.innerHTML = `<line x1="${{left}}" y1="${{top + height}}" x2="${{left + width}}" y2="${{top + height}}" stroke="#aaa"/><line x1="${{left}}" y1="${{top}}" x2="${{left}}" y2="${{top + height}}" stroke="#aaa"/><polyline points="${{points}}" fill="none" stroke="{ACCENT}" stroke-width="3"/><text x="${{left}}" y="15" font-size="12">% of qualifying emails mentioning this person</text><text x="5" y="${{top + 5}}" font-size="11">${{max}}%</text><text x="10" y="${{top + height}}" font-size="11">0%</text>${{xLabels}}`;
 }}
