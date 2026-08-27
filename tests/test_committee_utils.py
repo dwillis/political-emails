@@ -6,6 +6,7 @@ import pytest
 
 from committee_utils import (
     build_committee_map,
+    committee_key,
     join_key,
     needs_committee,
     norm_label,
@@ -83,6 +84,20 @@ def test_norm_label():
         "trump national committee jfc inc"
     )
     assert norm_label(None) == ""
+
+
+def test_committee_key_merges_case_and_trailing_punctuation():
+    a = committee_key("Trump National Committee JFC, Inc.")
+    assert a == committee_key("Trump National Committee JFC, Inc")
+    assert a == committee_key("  trump national committee jfc, inc.  ")
+    assert a == "trump national committee jfc, inc"
+
+
+def test_committee_key_keeps_internal_punctuation_and_leading_the():
+    # Less aggressive than norm_label: distinct committees stay distinct.
+    assert committee_key("D.S.C.C.") != committee_key("DSCC")
+    assert committee_key("The Collective PAC") != committee_key("Collective PAC")
+    assert committee_key(None) == ""
 
 
 def test_same_committee_variants():

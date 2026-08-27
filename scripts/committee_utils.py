@@ -60,6 +60,23 @@ def normalize_committee(value):
     return stripped
 
 
+def committee_key(value):
+    """Collapse committee-name variants that refer to the SAME entity for grouping.
+
+    Case-insensitive, internal whitespace collapsed, and leading/trailing
+    punctuation stripped so "Trump National Committee JFC, Inc" and
+    "Trump National Committee JFC, Inc." group together. Deliberately less
+    aggressive than norm_label(): internal punctuation and a leading "the" are
+    kept, so genuinely distinct committees are not merged. Returns "" for empty
+    input. This is a grouping key, not a display name -- pick a representative
+    raw value for display.
+    """
+    if value is None:
+        return ""
+    s = re.sub(r"\s+", " ", str(value)).strip().casefold()
+    return s.strip(" .,;:")
+
+
 def norm_label(value):
     """Aggressively normalize a committee name for equality comparison.
 

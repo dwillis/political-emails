@@ -10,12 +10,13 @@ import os
 import re
 import shutil
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 
 from utils import DATA_DIR, CONFIG_DIR, count_records
+from committee_utils import committee_key
 from charts import (
     vertical_bar_chart,
     stacked_bar_chart,
@@ -276,38 +277,54 @@ def _new_sender_mention_tracker(people):
         slug: [re.compile(pattern, re.IGNORECASE) for pattern in spec.get("patterns", [])]
         for slug, spec in people.items()
     }
+    # Tallies are keyed by a normalized committee key so name variants that
+    # differ only in case or trailing punctuation ("...Inc" vs "...Inc.")
+    # aggregate into one entity. ``display`` counts the raw variants behind each
+    # key so the most common spelling can be shown.
     tallies = defaultdict(lambda: defaultdict(lambda: {
         "total_emails": 0, "matching_emails": 0, "party_counts": defaultdict(int),
     }))
-    return compiled, tallies
+    display = defaultdict(Counter)
+    return compiled, tallies, display
 
 
 def _add_sender_mention(tracker, rec, date_key):
-    compiled, tallies = tracker
+    compiled, tallies, display = tracker
     committee = rec.get("committee")
     if not rec.get("disclaimer") or not committee:
         return
+    key = committee_key(committee)
+    if not key:
+        return
+    display[key][str(committee).strip()] += 1
     week = _week_start(date_key)
     text = mention_text(rec)
     for slug, patterns in compiled.items():
-        bucket = tallies[slug][(week, committee)]
+        bucket = tallies[slug][(week, key)]
         bucket["total_emails"] += 1
         bucket["party_counts"][party_bucket(rec.get("party"))] += 1
         if any(pattern.search(text) for pattern in patterns):
             bucket["matching_emails"] += 1
 
 
+def _display_name(variants):
+    """Pick the representative spelling for a committee key: most common, then
+    alphabetical for a deterministic tie-break independent of scan order."""
+    return min(variants.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+
+
 def _sender_mention_result(people, tracker):
-    _, tallies = tracker
+    _, tallies, display = tracker
+    names = {key: _display_name(variants) for key, variants in display.items()}
     result = {"people": {}}
     for slug, spec in people.items():
         rows = []
-        for (week, committee), tally in sorted(tallies[slug].items()):
+        for (week, key), tally in sorted(tallies[slug].items()):
             party_counts = tally["party_counts"]
             party = max(PARTY_BUCKETS, key=lambda bucket: party_counts[bucket])
             rows.append({
                 "week": week,
-                "committee": committee,
+                "committee": names.get(key, key),
                 "party": party,
                 "total_emails": tally["total_emails"],
                 "matching_emails": tally["matching_emails"],
@@ -353,8 +370,6 @@ def compute_stats(years, keyword_patterns=None, tracked_people=None):
         top_domains: [(domain, count), ...]  sorted desc, top 10,
         keyword_daily: { keyword: { "YYYY-MM-DD": {"D", "R", "unknown"} } }.
     """
-    from collections import Counter
-
     if keyword_patterns is None:
         keyword_patterns = load_tracked_keywords()
     if tracked_people is None:
