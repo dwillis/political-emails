@@ -128,16 +128,30 @@ def render_party(records):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reason", help="Only include this SUSPECT reason")
+    parser.add_argument("--mode", choices=["committee", "party"], default="committee",
+                        help="committee: review SUSPECT labels; party: assign party to party-null committees")
+    parser.add_argument("--reason", help="Only include this SUSPECT reason (committee mode)")
+    parser.add_argument("--min-records", type=int, default=1,
+                        help="party mode: minimum party-null emails per committee")
     parser.add_argument("--skip-fec", action="store_true")
     parser.add_argument("--out", default=str(OUT_PATH))
     args = parser.parse_args()
 
-    records = collect(args.reason, args.skip_fec)
-    print(f"SUSPECT records: {len(records)}")
+    if args.mode == "party":
+        records = collect_party(
+            (rec for path in iter_day_files() for rec in load_jsonl(path)),
+            args.min_records,
+        )
+        print(f"party-null committees: {len(records)}")
+        html = render_party(records)
+    else:
+        records = collect(args.reason, args.skip_fec)
+        print(f"SUSPECT records: {len(records)}")
+        html = render(records)
+
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
-        f.write(render(records))
+        f.write(html)
     print(f"wrote {args.out}\n  open it in a browser; export decisions when done.")
 
 
