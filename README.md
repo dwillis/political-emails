@@ -83,34 +83,38 @@ uv run --with ijson python backfill_committees.py             # write changes
 is still `null` and runs each through
 [`scripts/identify_committee.py`](scripts/identify_committee.py), a DSPy module
 that first parses the "Paid for by ..." disclaimer deterministically and falls
-back to a local LLM (via [Ollama](https://ollama.com)) only when that fails:
+back to an LLM (via [SiliconFlow](https://siliconflow.com)'s OpenAI-compatible
+API) only when that fails:
 
 ```bash
+export SILICONFLOW_API_KEY=...
 uv run --group enrich python scripts/enrich_committees.py --month 2026-02
 ```
 
 Options:
 - `--month YYYY-MM` — month to process (default: previous calendar month)
 - `--since / --until YYYY-MM-DD` — explicit date range instead of `--month`
-- `--model` — Ollama model tag for the LLM fallback (default: `qwen3:4b`)
-- `--ollama-url` — Ollama base URL (default: `http://localhost:11434`)
-- `--workers N` — concurrent LLM workers per day (also set `OLLAMA_NUM_PARALLEL`)
+- `--model` — model id for the LLM fallback (default: `Qwen/Qwen3.5-9B`)
+- `--api-base` — OpenAI-compatible base URL (default: `https://api.siliconflow.com/v1`;
+  pass `http://localhost:11434` to use a local [Ollama](https://ollama.com) instead)
+- `--api-key` — API key (default: `$SILICONFLOW_API_KEY`)
+- `--workers N` — concurrent LLM workers per day (with Ollama, also set `OLLAMA_NUM_PARALLEL`)
 - `--limit N` — cap records processed, useful for a smoke test
 - `--allow-thinking` — keep model reasoning on (for non-thinking instruct models)
 - `--dry-run` — identify committees but don't write files
 
-Requires the `enrich` dependency group (`uv sync --group enrich`) and a running
-Ollama with the model pulled (`ollama pull qwen3:4b`). Each day file is
+Requires the `enrich` dependency group (`uv sync --group enrich`) and a
+SiliconFlow API key in `SILICONFLOW_API_KEY`. Each day file is
 rewritten as it finishes, so an interrupted run resumes cleanly. Unknown results
 are stored as `null` (indistinguishable from "not yet processed"), so re-running
 a month retries any records still unresolved.
 
 **Model choice matters a lot.** Only ~25% of records reach the LLM fallback, but
-those calls dominate runtime. Use a *thinking-capable* model (default `qwen3:4b`);
-the script disables reasoning via Ollama's `think: false`, which cuts a call from
-minutes to well under a second. A reasoning model left in "thinking" mode is
-~200x slower and tends to emit rambling non-answers. Avoid community MLX
-conversions that ignore the thinking toggle.
+those calls dominate runtime. Thinking is disabled by default (SiliconFlow's
+`enable_thinking: false`, or Ollama's `think: false` when pointed at a local
+model), which cuts a call from minutes to well under a second — a reasoning model
+left in "thinking" mode is ~200x slower and tends to emit rambling non-answers.
+Pass `--allow-thinking` only for a plain instruct model that rejects those flags.
 
 To scrub garbage committee values (rambling model essays, adapter-marker
 leakage) that predate the stricter `normalize_committee`, run the cleanup — it

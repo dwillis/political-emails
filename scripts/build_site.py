@@ -10,7 +10,9 @@ import os
 import re
 import shutil
 import zipfile
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+from html import escape
 from pathlib import Path
 
 from utils import DATA_DIR, CONFIG_DIR, count_records
@@ -41,6 +43,7 @@ ACCENT_LIGHT = "#f4c37d"   # pale amber
 PARTY_COLORS = {"D": "#2b6cb0", "R": "#c53030", "OTH": "#6b46c1", "unknown": "#a0aec0"}
 KEYWORD_LINE_COLORS = {"Total": ACCENT, **PARTY_COLORS}
 PARTY_BUCKETS = ("D", "R", "OTH", "unknown")
+TRACKED_SENDERS_MIN_EMAILS = 10
 
 
 def party_bucket(party):
@@ -232,7 +235,109 @@ def load_tracked_keywords():
     return json.loads(path.read_text())
 
 
-def compute_stats(years, keyword_patterns=None):
+def load_tracked_people():
+    """Load configured people and their reviewed mention patterns."""
+    path = CONFIG_DIR / "tracked_people.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+
+_DISCLAIMER_START_RE = re.compile(r"\bpaid\s+for\s+(?:by|and)\b", re.IGNORECASE)
+_FOOTER_START_RE = re.compile(
+    r"\b(?:unsubscribe|email\s+preferences|privacy\s+policy|"
+    r"this\s+(?:email|message)\s+was\s+sent\s+to)\b",
+    re.IGNORECASE,
+)
+
+
+def mention_text(rec):
+    """Return the subject and campaign copy eligible for person matching.
+
+    ``clean_body`` removes most markup. Explicitly remove the disclaimer and
+    remaining footer so a name in legal text cannot count as a campaign mention.
+    """
+    body = str(rec.get("clean_body") or rec.get("body") or "")
+    starts = [m.start() for pattern in (_DISCLAIMER_START_RE, _FOOTER_START_RE)
+              if (m := pattern.search(body))]
+    if starts:
+        body = body[:min(starts)]
+    return f"{rec.get('subject', '')} {body}"
+
+
+def _week_start(date_key):
+    """Return the Monday that starts the calendar week containing date_key."""
+    day = date.fromisoformat(date_key)
+    return (day - timedelta(days=day.weekday())).isoformat()
+
+
+def _new_sender_mention_tracker(people):
+    compiled = {
+        slug: [re.compile(pattern, re.IGNORECASE) for pattern in spec.get("patterns", [])]
+        for slug, spec in people.items()
+    }
+    tallies = defaultdict(lambda: defaultdict(lambda: {
+        "total_emails": 0, "matching_emails": 0, "party_counts": defaultdict(int),
+    }))
+    return compiled, tallies
+
+
+def _add_sender_mention(tracker, rec, date_key):
+    compiled, tallies = tracker
+    committee = rec.get("committee")
+    if not rec.get("disclaimer") or not committee:
+        return
+    week = _week_start(date_key)
+    text = mention_text(rec)
+    for slug, patterns in compiled.items():
+        bucket = tallies[slug][(week, committee)]
+        bucket["total_emails"] += 1
+        bucket["party_counts"][party_bucket(rec.get("party"))] += 1
+        if any(pattern.search(text) for pattern in patterns):
+            bucket["matching_emails"] += 1
+
+
+def _sender_mention_result(people, tracker):
+    _, tallies = tracker
+    result = {"people": {}}
+    for slug, spec in people.items():
+        rows = []
+        for (week, committee), tally in sorted(tallies[slug].items()):
+            party_counts = tally["party_counts"]
+            party = max(PARTY_BUCKETS, key=lambda bucket: party_counts[bucket])
+            rows.append({
+                "week": week,
+                "committee": committee,
+                "party": party,
+                "total_emails": tally["total_emails"],
+                "matching_emails": tally["matching_emails"],
+            })
+        result["people"][slug] = {"name": spec.get("name", slug), "weekly": rows}
+    return result
+
+
+def compute_sender_mentions(years, people=None):
+    """Aggregate disclaimer committee mentions by person and calendar week."""
+    if people is None:
+        people = load_tracked_people()
+    tracker = _new_sender_mention_tracker(people)
+
+    for months in years.values():
+        for days in months.values():
+            for day_info in days:
+                date_key = Path(day_info["path"]).stem
+                with open(day_info["path"]) as f:
+                    for line in f:
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        _add_sender_mention(tracker, rec, date_key)
+
+    return _sender_mention_result(people, tracker)
+
+
+def compute_stats(years, keyword_patterns=None, tracked_people=None):
     """Single-pass scan over JSONL files, return rich stats dict.
 
     years: output of scan_data().
@@ -252,6 +357,8 @@ def compute_stats(years, keyword_patterns=None):
 
     if keyword_patterns is None:
         keyword_patterns = load_tracked_keywords()
+    if tracked_people is None:
+        tracked_people = load_tracked_people()
     compiled = {
         kw: re.compile(pat, re.IGNORECASE) for kw, pat in keyword_patterns.items()
     }
@@ -262,6 +369,7 @@ def compute_stats(years, keyword_patterns=None):
     domain_counter = Counter()
     by_year = {}
     keyword_daily = {kw: {} for kw in compiled}
+    sender_tracker = _new_sender_mention_tracker(tracked_people)
     all_dates = set()
 
     for year, months in years.items():
@@ -280,6 +388,8 @@ def compute_stats(years, keyword_patterns=None):
                             rec = json.loads(line)
                         except json.JSONDecodeError:
                             continue
+
+                        _add_sender_mention(sender_tracker, rec, date_key)
 
                         total_records += 1
                         year_stats["total"] += 1
@@ -317,6 +427,7 @@ def compute_stats(years, keyword_patterns=None):
         "by_year": by_year,
         "top_domains": domain_counter.most_common(10),
         "keyword_daily": keyword_daily,
+        "sender_mentions": _sender_mention_result(tracked_people, sender_tracker),
         "all_dates": sorted(all_dates),
     }
 
@@ -834,6 +945,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     <p>An archive of political fundraising emails from {year_range}, with daily updates.</p>
     <div class="header-links">
       <a href="downloads.html">All Downloads</a>
+      <a href="sender-mentions.html">Sender mentions</a>
       <a href="https://github.com/dwillis/political-emails">GitHub</a>
     </div>
   </header>
@@ -1134,6 +1246,90 @@ def generate_topic_html(topic, day, emails, generated_iso):
 </html>"""
 
 
+def generate_sender_mentions_html(generated_iso):
+    """Generate the client-rendered disclaimer sender mention tracker."""
+    tracker_css = """
+    .tracker-intro { color: #555; margin-bottom: 1rem; }
+    .tracker-controls { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; margin: 1rem 0; }
+    .tracker-controls label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; font-weight: 600; }
+    .tracker-controls select { font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: white; }
+    .tracker-summary { color: #666; font-size: 0.9rem; margin: 0.5rem 0 1rem; }
+    .tracker-chart { width: 100%; min-height: 280px; background: white; border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; }
+    .mention-table { width: 100%; border-collapse: collapse; background: white; font-size: 0.9rem; }
+    .mention-table th, .mention-table td { padding: 0.55rem 0.65rem; border-bottom: 1px solid var(--border); text-align: left; }
+    .mention-table th { color: var(--primary); font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    .mention-table td.num, .mention-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .mention-table .party { font-weight: 700; }
+    .tracker-error { color: #8b1e1e; }
+    """
+    generated = escape(str(generated_iso)[:16].replace("T", " "))
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sender mentions — Political Email Archive</title>
+  <style>{SHARED_CSS}{tracker_css}</style>
+  <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <h1>Political <span>Email</span> Archive</h1>
+    <p>How often disclaimer-identified political committees mention tracked people.</p>
+    <div class="header-links"><a href="index.html">Home</a><a href="downloads.html">All Downloads</a><a href="https://github.com/dwillis/political-emails">GitHub</a></div>
+  </header>
+  <main>
+    <h2>Sender mentions</h2>
+    <p class="tracker-intro">Counts distinct emails with a campaign disclaimer. Mentions are matched in the subject and message copy, excluding legal and unsubscribe footers. Committees need at least {TRACKED_SENDERS_MIN_EMAILS} qualifying emails in the selected period to appear below.</p>
+    <p class="tracker-intro"><a href="sender_mentions.json">Download the complete weekly data (JSON)</a></p>
+    <div class="tracker-controls">
+      <label>Person <select id="person"></select></label>
+      <label>Period <select id="period"><option value="52">Last 52 weeks</option><option value="0">All history</option></select></label>
+    </div>
+    <p class="tracker-summary" id="summary">Loading…</p>
+    <svg class="tracker-chart" id="chart" viewBox="0 0 800 280" role="img" aria-label="Weekly mention rate"></svg>
+    <h2>Committees</h2>
+    <div id="table"></div>
+  </main>
+  <footer>Generated {generated} UTC. Created by <a href="mailto:dpwillis@umd.edu">Derek Willis</a>. Released under the <a href="https://github.com/dwillis/political-emails/blob/main/LICENSE">MIT License</a>.</footer>
+<script>
+const MIN_EMAILS = {TRACKED_SENDERS_MIN_EMAILS};
+let tracker;
+const esc = value => String(value).replace(/[&<>"']/g, c => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
+function selectedRows() {{
+  const rows = tracker.people[person.value].weekly;
+  const weeks = [...new Set(rows.map(r => r.week))].sort();
+  const count = Number(period.value);
+  const allowed = new Set(count ? weeks.slice(-count) : weeks);
+  return {{ rows: rows.filter(r => allowed.has(r.week)), weeks: [...allowed].sort() }};
+}}
+function renderChart(rows, weeks) {{
+  const totals = Object.fromEntries(weeks.map(w => [w, [0, 0]]));
+  rows.forEach(r => {{ totals[r.week][0] += r.matching_emails; totals[r.week][1] += r.total_emails; }});
+  const values = weeks.map(w => totals[w][1] ? 100 * totals[w][0] / totals[w][1] : 0);
+  const svg = document.getElementById('chart');
+  if (!weeks.length) {{ svg.innerHTML = '<text x="400" y="140" text-anchor="middle">No qualifying emails in this period.</text>'; return; }}
+  const left = 45, top = 20, width = 730, height = 210;
+  const max = Math.max(5, Math.ceil(Math.max(...values) / 5) * 5);
+  const points = values.map((v, i) => `${{left + (weeks.length === 1 ? width / 2 : i * width / (weeks.length - 1))}},${{top + height - (v / max) * height}}`).join(' ');
+  svg.innerHTML = `<line x1="${{left}}" y1="${{top + height}}" x2="${{left + width}}" y2="${{top + height}}" stroke="#aaa"/><line x1="${{left}}" y1="${{top}}" x2="${{left}}" y2="${{top + height}}" stroke="#aaa"/><polyline points="${{points}}" fill="none" stroke="{ACCENT}" stroke-width="3"/><text x="${{left}}" y="15" font-size="12">% of qualifying emails mentioning this person</text><text x="5" y="${{top + 5}}" font-size="11">${{max}}%</text><text x="10" y="${{top + height}}" font-size="11">0%</text><text x="${{left}}" y="${{top + height + 22}}" font-size="11">${{weeks[0]}}</text><text x="${{left + width}}" y="${{top + height + 22}}" text-anchor="end" font-size="11">${{weeks[weeks.length - 1]}}</text>`;
+}}
+function render() {{
+  const {{rows, weeks}} = selectedRows();
+  const byCommittee = new Map();
+  rows.forEach(r => {{ const x = byCommittee.get(r.committee) || {{total: 0, matching: 0, party: r.party}}; x.total += r.total_emails; x.matching += r.matching_emails; byCommittee.set(r.committee, x); }});
+  const visible = [...byCommittee.entries()].filter(([, x]) => x.total >= MIN_EMAILS).sort((a, b) => b[1].matching / b[1].total - a[1].matching / a[1].total || b[1].total - a[1].total);
+  const total = rows.reduce((n, r) => n + r.total_emails, 0), matching = rows.reduce((n, r) => n + r.matching_emails, 0);
+  summary.textContent = `${{matching.toLocaleString()}} of ${{total.toLocaleString()}} qualifying emails (${{total ? (100 * matching / total).toFixed(1) : '0.0'}}%) mentioned ${{tracker.people[person.value].name}} across ${{visible.length}} displayed committees.`;
+  renderChart(rows, weeks);
+  table.innerHTML = visible.length ? `<table class="mention-table"><thead><tr><th>Committee</th><th>Party</th><th class="num">Matching</th><th class="num">Emails</th><th class="num">Rate</th></tr></thead><tbody>${{visible.map(([name, x]) => `<tr><td>${{esc(name)}}</td><td class="party">${{esc(x.party)}}</td><td class="num">${{x.matching.toLocaleString()}}</td><td class="num">${{x.total.toLocaleString()}}</td><td class="num">${{(100 * x.matching / x.total).toFixed(1)}}%</td></tr>`).join('')}}</tbody></table>` : '<p>No committees met the minimum email threshold in this period.</p>';
+}}
+fetch('sender_mentions.json').then(r => r.ok ? r.json() : Promise.reject()).then(data => {{ tracker = data; Object.entries(data.people).forEach(([slug, p]) => person.add(new Option(p.name, slug))); person.addEventListener('change', render); period.addEventListener('change', render); render(); }}).catch(() => {{ summary.innerHTML = '<span class="tracker-error">The tracking data could not be loaded.</span>'; }});
+</script>
+</body>
+</html>"""
+
+
 def generate_downloads_html(download_info):
     """Generate the full downloads archive page (downloads.html)."""
     if not download_info:
@@ -1303,6 +1499,16 @@ def main():
         for kw, daily in keyword_daily.items()
     }
     print(f"  Keyword matches: {kw_totals}")
+
+    sender_mentions = stats["sender_mentions"]
+    sender_mentions["generated_at"] = datetime.now(timezone.utc).isoformat()
+    sender_mentions["minimum_display_emails"] = TRACKED_SENDERS_MIN_EMAILS
+    (DOCS_DIR / "sender_mentions.json").write_text(
+        json.dumps(sender_mentions, ensure_ascii=False)
+    )
+    sender_page = DOCS_DIR / "sender-mentions.html"
+    sender_page.write_text(generate_sender_mentions_html(sender_mentions["generated_at"]))
+    print(f"  Wrote {sender_page}")
 
     dash_path = DOCS_DIR / "index.html"
     dash_path.write_text(generate_dashboard_html(stats, download_info, recent_summary))

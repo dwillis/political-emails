@@ -1,0 +1,10 @@
+{
+  "donald_trump": {
+    "name": "Donald Trump",
+    "patterns": [
+      "\\bDonald\\s+(?:J\\.?\\s+)?Trump\\b",
+      "\\bPresident\\s+Trump\\b",
+      "\\bTrump\\b"
+    ]
+  }
+}

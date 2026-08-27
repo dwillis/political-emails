@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from build_site import _clean_preview, compute_stats
+from build_site import _clean_preview, compute_sender_mentions, compute_stats, mention_text
 
 
 def _write_jsonl(path, records):
@@ -235,6 +235,62 @@ def test_compute_stats_keyword_counts_email_once_per_day(tmp_path, monkeypatch):
 
     stats = compute_stats(build_site.scan_data(), keyword_patterns=PATTERNS)
     assert stats["keyword_daily"]["datacenter"]["2026-02-01"]["D"] == 1
+
+
+def test_mention_text_excludes_disclaimer_and_footer_but_keeps_subject():
+    rec = {
+        "subject": "President Trump update",
+        "clean_body": "Campaign copy. Paid for by Friends of Donald Trump. Unsubscribe",
+    }
+    assert mention_text(rec) == "President Trump update Campaign copy. "
+
+
+def test_compute_sender_mentions_uses_disclaimer_committee_and_week(tmp_path, monkeypatch):
+    _write_jsonl(tmp_path / "2026" / "01" / "2026-01-06.jsonl", [
+        {"committee": "Committee A", "disclaimer": True, "party": "D",
+         "subject": "Donald J. Trump", "clean_body": "Trump Trump"},
+        {"committee": "Committee A", "disclaimer": True, "party": "D",
+         "subject": "No name", "clean_body": "Paid for by Donald Trump. Unsubscribe"},
+        {"committee": "Committee B", "disclaimer": False, "party": "R",
+         "subject": "Trump", "clean_body": "Trump"},
+        {"committee": "", "disclaimer": True, "party": "R",
+         "subject": "Trump", "clean_body": "Trump"},
+    ])
+    import build_site
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+    people = {"donald_trump": {"name": "Donald Trump", "patterns": [r"\bTrump\b"]}}
+
+    result = compute_sender_mentions(build_site.scan_data(), people)
+
+    assert result["people"]["donald_trump"]["name"] == "Donald Trump"
+    assert result["people"]["donald_trump"]["weekly"] == [{
+        "week": "2026-01-05", "committee": "Committee A", "party": "D",
+        "total_emails": 2, "matching_emails": 1,
+    }]
+
+
+def test_compute_stats_includes_sender_mentions_in_its_single_scan(tmp_path, monkeypatch):
+    _write_jsonl(tmp_path / "2026" / "01" / "2026-01-05.jsonl", [{
+        "committee": "Committee A", "disclaimer": True, "party": "R",
+        "subject": "Trump", "clean_body": "Message copy",
+    }])
+    import build_site
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+    people = {"trump": {"name": "Donald Trump", "patterns": [r"\bTrump\b"]}}
+
+    stats = compute_stats(build_site.scan_data(), keyword_patterns={}, tracked_people=people)
+
+    assert stats["sender_mentions"]["people"]["trump"]["weekly"][0]["matching_emails"] == 1
+
+
+def test_generate_sender_mentions_page_links_data_and_threshold():
+    import build_site
+
+    html = build_site.generate_sender_mentions_html("2026-08-25T12:00:00+00:00")
+
+    assert 'fetch(\'sender_mentions.json\')' in html
+    assert "Last 52 weeks" in html
+    assert "const MIN_EMAILS = 10" in html
 
 
 def test_compute_stats_keyword_matching_is_word_bounded(tmp_path, monkeypatch):
