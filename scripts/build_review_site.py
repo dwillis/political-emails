@@ -250,6 +250,7 @@ function hi(body, committee, disc) {
 }
 function save(){ localStorage.setItem(KEY, JSON.stringify(decisions)); render(); }
 function decide(id, choice, corrected){ decisions[id] = {choice, corrected: corrected||""}; if (idx < filtered().length-1) idx++; save(); }
+function go(d){ const n = idx + d; if (n >= 0 && n < filtered().length){ idx = n; render(); } }
 
 function render(){
   const list = filtered();
@@ -278,7 +279,7 @@ function render(){
         <button onclick="decide('${r.id}','skip')">Skip <kbd>S</kbd></button>
         <span class="done">${d ? '✓ '+d.choice+(d.corrected?': '+esc(d.corrected):'') : ''}</span>
       </div>
-      <div class="hint"><kbd>&larr;</kbd>/<kbd>&rarr;</kbd> navigate &middot; ${idx+1} of ${list.length}</div>
+      <div class="hint"><button onclick="go(-1)">&larr; Prev</button> <button onclick="go(1)">Next &rarr;</button> &middot; ${idx+1} of ${list.length} &middot; or use <kbd>&larr;</kbd>/<kbd>&rarr;</kbd></div>
     </div>`;
 }
 function editVal(id){
@@ -380,6 +381,7 @@ function hi(body) {
 }
 function save(){ localStorage.setItem(KEY, JSON.stringify(decisions)); render(); }
 function decide(i, party){ const cmte = RECORDS[i].committee; decisions[cmte] = {party}; if (idx < RECORDS.length-1) idx++; save(); }
+function go(d){ const n = idx + d; if (n >= 0 && n < RECORDS.length){ idx = n; render(); } }
 
 function render(){
   const done = RECORDS.filter(r => decisions[r.committee]).length;
@@ -409,7 +411,7 @@ function render(){
         <button onclick="decide(${idx},'skip')">Skip <kbd>S</kbd></button>
         <span class="done">${d ? '✓ '+d.party : ''}</span>
       </div>
-      <div class="hint"><kbd>&larr;</kbd>/<kbd>&rarr;</kbd> navigate &middot; ${idx+1} of ${RECORDS.length}</div>
+      <div class="hint"><button onclick="go(-1)">&larr; Prev</button> <button onclick="go(1)">Next &rarr;</button> &middot; ${idx+1} of ${RECORDS.length} &middot; or use <kbd>&larr;</kbd>/<kbd>&rarr;</kbd></div>
     </div>`;
 }
 function exportCSV(){
