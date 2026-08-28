@@ -116,14 +116,31 @@ def collect(reason_filter, skip_fec):
     return out
 
 
+def _inject(template, records):
+    """Serialize records into the template's inline <script> data slot.
+
+    json.dumps leaves '<' and '/' raw, so an email body containing '</script>'
+    (or '<!--', '<style>') would terminate the <script> early and let the raw
+    markup render as live HTML. Escaping '<'/'>' to \\uXXXX (valid JS that parses
+    back to the same character) and the U+2028/U+2029 line separators (which
+    break JS string literals) keeps arbitrary body text inert.
+    """
+    data = (
+        json.dumps(records, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+    return template.replace("/*__DATA__*/", data)
+
+
 def render(records):
-    data = json.dumps(records, ensure_ascii=False)
-    return PAGE.replace("/*__DATA__*/", data)
+    return _inject(PAGE, records)
 
 
 def render_party(records):
-    data = json.dumps(records, ensure_ascii=False)
-    return PARTY_PAGE.replace("/*__DATA__*/", data)
+    return _inject(PARTY_PAGE, records)
 
 
 def main():

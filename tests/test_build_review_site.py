@@ -1,6 +1,6 @@
 """Tests for party-review collection in build_review_site."""
 
-from build_review_site import collect_party, render_party
+from build_review_site import collect_party, render, render_party
 
 
 def _rec(committee, party, date, body=""):
@@ -48,3 +48,23 @@ def test_render_party_embeds_data_and_schema():
     assert "/*__DATA__*/" not in html             # placeholder replaced
     assert '["committee","party","note"]' in html  # export schema present
     assert "party_review_decisions_v1" in html    # separate localStorage key
+
+
+def test_render_party_escapes_script_break_in_body():
+    # An email body containing "</script>" (or <style>, <!--) must not break out
+    # of the inline <script> that carries the data. The raw markup would
+    # otherwise be parsed as live HTML (leaking the email's own styling).
+    evil = 'x</script><style>body{background:magenta}</style>\n\nmore'
+    html = render_party([{
+        "committee": "Evil Cmte", "count": 1, "date": "2026-03-01",
+        "name": "S", "email": "s@x.org", "domain": "x.org",
+        "subject": "Subj", "body": evil, "disclaimer_says": "",
+    }])
+    # Exactly one </script> — the real one closing our data block.
+    assert html.count("</script>") == 1
+    # The committee-review renderer shares the same injection and fix.
+    chtml = render([{"id": "1", "date": "2026-03-01", "name": "S", "email": "s@x.org",
+                     "domain": "x.org", "subject": "S", "body": evil,
+                     "committee": "Evil Cmte", "disclaimer_says": "", "source": "x",
+                     "reason": "contradicts-disclaimer"}])
+    assert chtml.count("</script>") == 1
