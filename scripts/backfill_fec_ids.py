@@ -1,15 +1,18 @@
-"""Populate `committee_fec_id` on archive records from the FEC committee master.
+"""Populate `committee_fec_id` (and `committee_canonical`) on archive records.
 
-Each record's `committee` name is resolved by fec_match.resolve_committee's
-deterministic tier ladder (exact -> strip-unique -> subset-unique ->
-acronym-unique -> cand-link), guarded by cycle and office-word checks.
-Resolved IDs are stored as `committee_fec_id`; `ambiguous` names go to a
-frequency-ordered review CSV and are NEVER auto-set, and fuzzy matches are
-only ever a review hint elsewhere.
+Resolution order per record's `committee` name:
+  1. the committed registry (config/committee_registry.json) by alias —
+     human decisions survive the daily recomputation;
+  2. fec_match.resolve_committee's guarded tier ladder (exact -> strip-unique
+     -> subset-unique -> acronym-unique -> cand-link), cycle- and
+     office-guarded. Review-only tiers (acronym-unique, cand-link),
+     `ambiguous` and `none` results NEVER auto-set anything: names no registry
+     alias and no auto tier resolves go to a frequency-ordered review CSV for
+     the registry loop instead.
 
 Idempotent: resolution is recomputed from `committee` each run, so re-running
 keeps records in sync as committee names or the FEC cache change. Records
-whose committee is not a federal committee (state/local) simply get None.
+whose committee is not a federal committee simply get None.
 
 Artifacts (state/validation/, skipped on --dry-run):
   fec_review_candidates.csv  ambiguous names, frequency-ordered, with the
@@ -27,7 +30,8 @@ import csv
 import random
 from collections import Counter
 
-from committee_utils import iter_day_files
+from committee_registry import load_registry, resolve_name
+from committee_utils import iter_day_files, norm_label
 from utils import STATE_DIR, load_jsonl, save_jsonl
 
 SAMPLES_PER_TIER = 100
@@ -57,22 +61,38 @@ def resolve_for_record(rec, index, cache):
     return resolve_fec(rec.get("committee"), record_cycle(rec), index, cache)
 
 
-def apply_fec_id(rec, index, cache):
-    """Resolve and set rec['committee_fec_id']. Returns (changed, tier, fid).
+def apply_fec_id(rec, index, cache, registry=None, alias_map=None, fec_map=None):
+    """Resolve and set rec['committee_fec_id'] (+ committee_canonical).
 
-    The key is re-inserted at the record's end (after committee/committee_source)
-    so diffs stay stable regardless of prior key order. Review-only tiers and
-    ambiguous/none resolve to None (review candidates are never auto-set).
+    The committed registry is consulted FIRST so human decisions survive the
+    daily recomputation; the FEC tier ladder runs only when the registry has no
+    alias for the name. The keys are re-inserted at the record's end (after
+    committee/committee_source) so diffs stay stable regardless of prior key
+    order. Review-only tiers and ambiguous/none resolve to None (review
+    candidates are never auto-set); noise-typed registry entities stay
+    canonical-None.
     """
-    from fec_match import AUTO_TIERS, REVIEW_ONLY_TIERS
+    from fec_match import REVIEW_ONLY_TIERS
 
-    tier, fid, _cands = resolve_for_record(rec, index, cache)
-    if tier not in AUTO_TIERS or tier in REVIEW_ONLY_TIERS:
-        fid = None
-    changed = ("committee_fec_id" not in rec) or rec.get("committee_fec_id") != fid
+    committee = rec.get("committee")
+    entity = (resolve_name(registry or {}, committee, alias_map)
+              if (registry or fec_map) else None)
+    if entity:
+        # committed decision wins, even over the FEC ladder — and skips it
+        tier, fid = "registry", entity.get("fec_id")
+        canonical = None if entity.get("type") == "noise" else entity.get("name")
+    else:
+        tier, fid, _cands = resolve_for_record(rec, index, cache)
+        if tier in REVIEW_ONLY_TIERS:
+            fid = None
+        canonical = (fec_map or {}).get(fid, {}).get("name") if fid else None
+    changed = (rec.get("committee_fec_id") != fid
+               or rec.get("committee_canonical") != canonical)
     rec.pop("committee_fec_id", None)
     rec["committee_fec_id"] = fid
-    return changed, tier, fid
+    rec.pop("committee_canonical", None)
+    rec["committee_canonical"] = canonical
+    return changed, tier, fid, canonical
 
 
 def spot_check_sample(rows_by_tier, seen_by_tier, tier, rec, committee, fid, index, rng):
@@ -122,6 +142,15 @@ def main():
 
     download_fec()
     index, _buckets = load_fec_index()
+    registry = load_registry()
+    fec_map = {e["fec_id"]: e for e in registry.values() if e.get("fec_id")}
+    alias_map = {}
+    for e in registry.values():
+        for alias in e.get("aliases") or []:
+            alias_map[norm_label(alias)] = e
+    if registry:
+        print(f"Registry: {len(registry):,} entities "
+              f"({sum(1 for e in registry.values() if e['status'] == 'human'):,} human)")
     review_dir = STATE_DIR / "validation"
 
     day_files = iter_day_files()
@@ -133,6 +162,7 @@ def main():
 
     cache = {}
     counts = Counter()
+    matched_ids = set()
     tier_counts = Counter()
     ambiguous = {}  # committee -> {"count": n, "tier": t, "cands": [...]}
     rows_by_tier = {}
@@ -145,18 +175,20 @@ def main():
         file_changed = False
         for rec in records:
             committee = rec.get("committee")
-            changed, tier, fid = apply_fec_id(rec, index, cache)
+            changed, tier, fid, canonical = apply_fec_id(
+                rec, index, cache, registry, alias_map, fec_map)
             if changed:
                 file_changed = True
             if committee:
                 tier_counts[tier] += 1
                 if fid:
                     counts["matched"] += 1
+                    matched_ids.add(fid)
                     spot_check_sample(rows_by_tier, seen_by_tier, tier, rec,
                                       committee, fid, index, rng)
                 else:
                     counts["unmatched"] += 1
-                    if tier != "none":
+                    if tier not in (None, "none", "registry"):
                         entry = ambiguous.setdefault(
                             committee, {"count": 0, "tier": tier,
                                         "cands": resolve_for_record(
@@ -168,13 +200,14 @@ def main():
             if not args.dry_run:
                 save_jsonl(path, records)
 
-    distinct_ids = {fid for (_t, fid, _c) in cache.values() if fid}
     verb = "would change" if args.dry_run else "changed"
     print(f"{counts['records']:,} records: {counts['matched']:,} with an FEC ID "
-          f"({len(distinct_ids):,} distinct committees), {counts['unmatched']:,} "
+          f"({len(matched_ids):,} distinct committees), {counts['unmatched']:,} "
           f"without. {files_changed:,} files {verb}.")
-    print("Tier ladder: " + ", ".join(f"{t}={tier_counts[t]:,}" for t in AUTO_TIERS)
-          + f", ambiguous={tier_counts['ambiguous']:,}, none={tier_counts['none']:,}")
+    print("Tiers: registry=%d, %s, ambiguous=%d, none=%d" % (
+        tier_counts["registry"],
+        ", ".join(f"{t}={tier_counts[t]:,}" for t in AUTO_TIERS),
+        tier_counts["ambiguous"], tier_counts["none"]))
 
     if not args.dry_run:
         review_dir.mkdir(parents=True, exist_ok=True)
@@ -189,7 +222,7 @@ def main():
                 names = [index["meta"][c]["name"] for c in entry["cands"]]
                 w.writerow([committee, entry["count"], entry["tier"],
                             "|".join(entry["cands"]), "|".join(names)])
-        write_samples_csv(samples_csv, rows_by_tier, AUTO_TIERS)
+        write_samples_csv(samples_csv, rows_by_tier, ("registry",) + AUTO_TIERS)
         print(f"  review queue: {len(ambiguous):,} names -> {review_csv}")
         print(f"  spot-check samples -> {samples_csv}")
 

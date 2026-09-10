@@ -1,4 +1,4 @@
-"""Tests for backfill_fec_ids: demotion, idempotency, key order, sampling."""
+"""Tests for backfill_fec_ids: registry-first, demotion, idempotency, sampling."""
 
 import csv
 import random
@@ -18,52 +18,117 @@ def _index(cm_rows):
     return index
 
 
+def _entity(eid="nfd:acme", fec_id=None, name="Acme", type_="c4", aliases=None):
+    return {"id": eid, "fec_id": fec_id, "name": name, "type": type_,
+            "party": None, "status": "human",
+            "aliases": aliases or [name]}
+
+
 # ---------------------------------------------------------------------------
 # apply_fec_id
 # ---------------------------------------------------------------------------
 
-def test_apply_fec_id_sets_exact_match_and_appends_key_at_end():
+def test_apply_fec_id_sets_exact_match_and_appends_keys_at_end():
     idx = _index([_cm(2024, "C001", "STEVE GARVEY FOR US SENATE", tp="S")])
     rec = {"date": "2024-05-01", "email": "a@b.com",
            "committee": "STEVE GARVEY FOR U.S. SENATE"}
-    changed, tier, fid = bf.apply_fec_id(rec, idx, {})
+    changed, tier, fid, canonical = bf.apply_fec_id(rec, idx, {})
     assert (changed, tier, fid) == (True, "exact", "C001")
     assert rec["committee_fec_id"] == "C001"
-    # the key is re-inserted at the record's end so diffs stay stable
-    assert list(rec)[-1] == "committee_fec_id"
+    assert canonical is None  # no registry entity for this FEC id
+    # the keys are re-inserted at the record's end so diffs stay stable
+    assert list(rec)[-2:] == ["committee_fec_id", "committee_canonical"]
 
 
 def test_apply_fec_id_idempotent():
     idx = _index([_cm(2024, "C001", "STEVE GARVEY FOR US SENATE", tp="S")])
     rec = {"date": "2024-05-01", "committee": "STEVE GARVEY FOR U.S. SENATE"}
     bf.apply_fec_id(rec, idx, {})
-    changed, _t, _f = bf.apply_fec_id(rec, idx, {})
+    changed, _t, _f, _c = bf.apply_fec_id(rec, idx, {})
     assert not changed
     # and from a fresh cache, as the daily recomputation does
-    changed, _t, _f = bf.apply_fec_id(rec, idx, {})
+    changed, _t, _f, _c = bf.apply_fec_id(rec, idx, {})
     assert not changed
+
+
+def test_apply_fec_id_idempotent_through_canonical():
+    # a canonical change alone (same fid) still marks the record changed
+    idx = _index([_cm(2024, "C001", "STEVE GARVEY FOR US SENATE", tp="S")])
+    rec = {"date": "2024-05-01", "committee": "STEVE GARVEY FOR U.S. SENATE"}
+    bf.apply_fec_id(rec, idx, {})
+    fec_map = {"C001": {"name": "Garvey Senate"}}
+    changed, _t, _f, canonical = bf.apply_fec_id(rec, idx, {}, None, None, fec_map)
+    assert changed and canonical == "Garvey Senate"
+    changed, _t, _f, _c = bf.apply_fec_id(rec, idx, {}, None, None, fec_map)
+    assert not changed
+
+
+def test_registry_alias_wins_and_skips_the_ladder():
+    # the ladder would resolve this name to C001; the committed decision wins
+    idx = _index([_cm(2024, "C001", "STEVE GARVEY FOR US SENATE", tp="S")])
+    registry = {"nfd:acme": _entity(aliases=["STEVE GARVEY FOR U.S. SENATE"])}
+    rec = {"date": "2024-05-01", "committee": "STEVE GARVEY FOR U.S. SENATE"}
+    changed, tier, fid, canonical = bf.apply_fec_id(rec, idx, {}, registry)
+    assert changed and (tier, fid, canonical) == ("registry", None, "Acme")
+    # the ladder cache stayed cold (the alias path never touches it)
+    assert bf.resolve_fec("STEVE GARVEY FOR U.S. SENATE", None, idx, {})  # sanity
+    rec2 = {"date": "2024-05-01", "committee": "STEVE GARVEY FOR U.S. SENATE"}
+    cache = {}
+    bf.apply_fec_id(rec2, idx, cache, registry)
+    assert cache == {}
+
+
+def test_registry_fec_entity_sets_both_fields():
+    idx = _index([_cm(2024, "C001", "STEVE GARVEY FOR US SENATE", tp="S")])
+    registry = {"C001": _entity("C001", "C001", "Garvey Senate Committee",
+                                aliases=["STEVE GARVEY FOR U.S. SENATE"])}
+    rec = {"date": "2024-05-01", "committee": "STEVE GARVEY FOR U.S. SENATE"}
+    changed, tier, fid, canonical = bf.apply_fec_id(rec, idx, {}, registry)
+    assert (tier, fid, canonical) == ("registry", "C001", "Garvey Senate Committee")
+
+
+def test_registry_noise_entity_canonical_stays_none():
+    registry = {"nfd:spam": _entity("nfd:spam", name="Gibberish LLC",
+                                    type_="noise")}
+    rec = {"date": "2024-05-01", "committee": "Gibberish LLC"}
+    changed, tier, fid, canonical = bf.apply_fec_id(rec, None, {}, registry)
+    assert (tier, fid, canonical) == ("registry", None, None)
+
+
+def test_ladder_match_gets_registry_canonical_name():
+    idx = _index([_cm(2024, "C001", "STEVE GARVEY FOR US SENATE", tp="S")])
+    fec_map = {"C001": {"name": "Garvey Senate Committee"}}
+    rec = {"date": "2024-05-01", "committee": "STEVE GARVEY FOR U.S. SENATE"}
+    changed, tier, fid, canonical = bf.apply_fec_id(rec, idx, {}, None, None, fec_map)
+    assert (tier, fid, canonical) == ("exact", "C001", "Garvey Senate Committee")
 
 
 def test_apply_fec_id_updates_stale_value_and_clears_gone_matches():
     idx = _index([_cm(2024, "C001", "STEVE GARVEY FOR US SENATE", tp="S")])
     rec = {"date": "2024-05-01", "committee": "STEVE GARVEY FOR U.S. SENATE",
            "committee_fec_id": "C999"}
-    changed, _t, fid = bf.apply_fec_id(rec, idx, {})
+    changed, _t, fid, _c = bf.apply_fec_id(rec, idx, {})
     assert changed and fid == "C001"
     rec = {"date": "2024-05-01", "committee": "Unrelated Group",
            "committee_fec_id": "C999"}
-    changed, tier, fid = bf.apply_fec_id(rec, idx, {})
-    assert changed and tier == "none" and fid is None
+    changed, tier, fid, canonical = bf.apply_fec_id(rec, idx, {})
+    assert changed and tier == "none" and fid is None and canonical is None
     assert rec["committee_fec_id"] is None
+    assert rec["committee_canonical"] is None
 
 
 def test_review_only_acronym_tier_never_sets():
     idx = _index([_cm(2020, "C1", "VOTER PROTECTION PROJECT", tp="O")])
     rec = {"date": "2020-01-01", "committee": "VPP"}
-    changed, tier, fid = bf.apply_fec_id(rec, idx, {})
-    # the tier resolves for reporting, but the ID is never auto-set
-    assert tier == "acronym-unique" and fid is None and changed
+    changed, tier, fid, canonical = bf.apply_fec_id(rec, idx, {})
+    # the tier resolves for reporting, but the ID is never auto-set; a record
+    # that never had the keys reports no change (nothing would be written)
+    assert tier == "acronym-unique" and fid is None
     assert rec["committee_fec_id"] is None
+    assert rec["committee_canonical"] is None
+    stale = {"date": "2020-01-01", "committee": "VPP", "committee_fec_id": "C1"}
+    changed, _t, _f, _c = bf.apply_fec_id(stale, idx, {})
+    assert changed  # a stale ID does get cleared
 
 
 def test_review_only_cand_link_tier_never_sets():
@@ -74,8 +139,8 @@ def test_review_only_cand_link_tier_never_sets():
         [("H2MA00633", "MOULTON, SETH", "DEM", "H")])
     idx["cand_committees"] = _cand_committees(cm)
     rec = {"date": "2024-05-01", "committee": "Seth Moulton 2026"}
-    changed, tier, fid = bf.apply_fec_id(rec, idx, {})
-    assert tier == "cand-link" and fid is None and changed
+    changed, tier, fid, _c = bf.apply_fec_id(rec, idx, {})
+    assert tier == "cand-link" and fid is None and not changed
     assert rec["committee_fec_id"] is None
 
 
@@ -85,9 +150,14 @@ def test_ambiguous_never_sets():
         _cm(2024, "C002", "PRICE FOR CONGRESS"),
     ])
     rec = {"date": "2021-05-01", "committee": "Price for Congress"}
-    changed, tier, fid = bf.apply_fec_id(rec, idx, {})
-    assert tier == "ambiguous" and fid is None and changed
+    changed, tier, fid, _c = bf.apply_fec_id(rec, idx, {})
+    assert tier == "ambiguous" and fid is None
     assert rec["committee_fec_id"] is None
+    # a stale ID gets cleared (and that marks the record changed)
+    stale = {"date": "2021-05-01", "committee": "Price for Congress",
+             "committee_fec_id": "C001"}
+    changed, _t, fid, _c = bf.apply_fec_id(stale, idx, {})
+    assert changed and fid is None
 
 
 # ---------------------------------------------------------------------------

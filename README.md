@@ -160,24 +160,59 @@ uv run python scripts/apply_committee_fixes.py
 ```
 
 **FEC cross-reference** — matches committee names to the FEC committee master
-(a confidence signal; only *exact* matches are trusted, fuzzy are review hints):
+(a confidence signal; the auto tiers — exact and the unique strip/subset
+ladder — are trusted, ambiguous ones are review hints):
 
 ```bash
 uv run python scripts/fec_match.py            # writes state/fec/fec_matches.csv
 ```
 
 **Persisting the FEC ID** — [`scripts/backfill_fec_ids.py`](scripts/backfill_fec_ids.py)
-stores each record's exact FEC committee ID as `committee_fec_id` (or `null` when
-there's no committee or no exact match). This gives every federal committee a
-canonical identity, so downstream aggregation (e.g. the sender-mention tracker)
-groups name variants — `"Trump National Committee JFC, Inc."` vs `"...JFC Inc"` —
-that resolve to the same real committee. Idempotent; the daily collection workflow
-runs it automatically.
+stores each record's resolved committee as `committee_fec_id` plus the entity's
+frozen display name as `committee_canonical` (both `null` when there's no
+committee or no confident match). Resolution is **registry-first**: a name whose
+normalized form is an alias in `config/committee_registry.json` always wins, so
+human decisions survive recomputation; otherwise the guarded tier ladder in
+[`scripts/fec_match.py`](scripts/fec_match.py) runs (exact → strip-unique →
+subset-unique → acronym-unique → cand-link), cycle- and office-guarded, with
+multiple candidates at any tier stopping the ladder as `ambiguous`. Review-only
+tiers (acronym-unique, cand-link) and ambiguous/none results never auto-set —
+unresolved names land in a frequency-ordered review CSV instead. This gives
+every federal committee a canonical identity, so downstream aggregation groups
+name variants that resolve to the same real committee. Idempotent; the daily
+collection workflow runs it automatically.
 
 ```bash
 uv run python scripts/backfill_fec_ids.py --dry-run   # report only
-uv run python scripts/backfill_fec_ids.py             # write committee_fec_id
+uv run python scripts/backfill_fec_ids.py             # write the fields
 ```
+
+**Committee registry** — [`config/committee_registry.json`](config/committee_registry.json)
+is the source of truth for canonical entities, federal or not. Each entity has
+an `id` (FEC ID, or `nfd:<slug>` for non-federal), a `type` (federal-candidate,
+federal-pac, party-committee, joint-fundraising, state-party, state-candidate,
+newsletter, c4, other, noise), a frozen display `name`, `party`, and verbatim
+`aliases`. Two normalized aliases resolving to different entities are a hard
+error (the "SAVE AMERICA" registered-twice case stays ambiguous rather than
+silently picking one). [`scripts/build_committee_registry.py`](scripts/build_committee_registry.py)
+seeds `status: auto` federal entities from one archive scan and clusters the
+unresolved names into `state/validation/registry_proposals.csv`; auto rebuilds
+never overwrite `status: human` entries.
+
+**Entity review loop** — triage the proposals in a browser, commit the decisions:
+
+```bash
+uv run python scripts/build_committee_registry.py          # refresh registry + proposals
+uv run python scripts/build_entity_review.py --queue-cap 500
+# open state/validation/entity_review.html, triage, "Export decisions CSV"
+uv run python scripts/apply_registry_decisions.py --decisions entity_decisions.csv
+git add config/committee_registry.json && git commit
+```
+
+Decisions: **A** adopt an FEC candidate · **N** new non-federal entity (+type) ·
+**M** merge into an existing registry entity · **X** noise · **S** skip.
+Every applied decision is upgraded to `status: human`; then rerun
+`backfill_fec_ids.py` to propagate it to the archive.
 
 **Validation report** — tiers every labeled record and builds a review queue:
 
@@ -338,7 +373,8 @@ Each line in a JSONL file is a JSON record with these fields:
 | `urls` | array | URLs found in the email body |
 | `committee` | string/null | Political committee that sent the email (LLM-extracted; `null` when unknown or not yet determined) |
 | `committee_source` | string/null | How `committee` was derived: `disclaimer`, `llm:<model>`, `backfill`, or `null` |
-| `committee_fec_id` | string/null | Canonical FEC committee ID from an exact name match (see FEC cross-reference); `null` when no committee or no match |
+| `committee_fec_id` | string/null | Canonical FEC committee ID, resolved registry-first then via the guarded tier ladder (see Committee registry below); `null` when no committee, no match, or a review-only match |
+| `committee_canonical` | string/null | The resolved entity's frozen display name from `config/committee_registry.json` (e.g. `DNC` for every Democratic National Committee variant); `null` when unresolved or the entity is typed `noise` |
 | `party_source` | string/null | How `party` was derived (see Party derivation below) |
 
 ## Automation
