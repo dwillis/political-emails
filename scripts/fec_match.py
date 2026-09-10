@@ -13,6 +13,7 @@ misspelling. This is a VALIDATION signal only -- nothing here writes to data/.
 import argparse
 import csv
 import difflib
+import re
 import urllib.request
 import zipfile
 from collections import Counter
@@ -28,6 +29,38 @@ CMTE_ID, CMTE_NM = 0, 1  # cm.txt field positions
 # -> "HARPER FOR CONGRESS"). 0.95 keeps accent/"US Senate" normalizations only.
 # Fuzzy matches are a review hint, NEVER a confirmation signal (see validate).
 FUZZY_CUTOFF = 0.95
+
+
+def fec_match_key(value):
+    """Equality key for FEC name matching (never replaces norm_label elsewhere).
+
+    norm_label plus two committee-name conventions norm_label alone misses:
+    an ampersand spelled out in some registered names ("SMITH & JONES" vs
+    "SMITH AND JONES"), and dotted initialisms that norm_label splits into
+    separate letters ("U.S. Senate" -> "u s senate" vs "US Senate" ->
+    "us senate"). Runs of adjacent single-letter tokens are re-joined, so
+    "u s" and "d n c" become "us" and "dnc"; lone initials ("John Q Public")
+    are untouched. Keys BOTH the index and every lookup so the two sides
+    agree; norm_label itself keeps its other duties (party-override CSV keys).
+    """
+    if value is None:
+        return ""
+    key = norm_label(str(value).replace("&", " and "))
+    if not key:
+        return ""
+    words = key.split()
+    out, run = [], []
+    for w in words:
+        if len(w) == 1:
+            run.append(w)
+            continue
+        if run:
+            out.append("".join(run))
+            run = []
+        out.append(w)
+    if run:
+        out.append("".join(run))
+    return " ".join(out)
 
 
 def cm_url(year):
@@ -85,14 +118,14 @@ def load_fec_index(years=CYCLES):
                     if len(parts) <= CMTE_NM:
                         continue
                     fid, name = parts[CMTE_ID], parts[CMTE_NM]
-                    norm = norm_label(name)
-                    if not norm:
+                    key = fec_match_key(name)
+                    if not key:
                         continue
-                    prev = name_index.get(norm)
+                    prev = name_index.get(key)
                     if prev is None or year > prev[2]:
-                        name_index[norm] = (fid, name, year)
+                        name_index[key] = (fid, name, year)
                     if prev is None:
-                        buckets.setdefault((norm[0], len(norm) // 5), []).append(norm)
+                        buckets.setdefault((key[0], len(key) // 5), []).append(key)
     print(f"FEC index: {len(name_index):,} distinct names from {loaded} cycle file(s)")
     return name_index, buckets
 
@@ -103,18 +136,18 @@ def match_name(value, name_index, buckets):
     Returns (match_type, fec_id, matched_name, score). match_type is
     "exact" | "fuzzy" | "none".
     """
-    norm = norm_label(value)
-    if not norm:
+    key = fec_match_key(value)
+    if not key:
         return ("none", "", "", 0.0)
-    hit = name_index.get(norm)
+    hit = name_index.get(key)
     if hit:
         return ("exact", hit[0], hit[1], 1.0)
     # Fuzzy within the same first-char + length bucket (keeps it tractable).
-    candidates = buckets.get((norm[0], len(norm) // 5), [])
-    close = difflib.get_close_matches(norm, candidates, n=1, cutoff=FUZZY_CUTOFF)
+    candidates = buckets.get((key[0], len(key) // 5), [])
+    close = difflib.get_close_matches(key, candidates, n=1, cutoff=FUZZY_CUTOFF)
     if close:
         best = close[0]
-        score = difflib.SequenceMatcher(None, norm, best).ratio()
+        score = difflib.SequenceMatcher(None, key, best).ratio()
         fid, name, _ = name_index[best]
         return ("fuzzy", fid, name, round(score, 3))
     return ("none", "", "", 0.0)

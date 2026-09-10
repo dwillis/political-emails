@@ -64,6 +64,35 @@ def test_normalize_committee_keeps_names_with_innocuous_words():
     assert normalize_committee("Friends of Cory Booker") == "Friends of Cory Booker"
 
 
+def test_normalize_committee_strips_trailing_markdown_emphasis():
+    # extractor leakage from the disclaimer tail
+    assert normalize_committee("MIKE COLLINS FOR SENATE**") == "MIKE COLLINS FOR SENATE"
+    assert normalize_committee("La Gente for Grijalva_") == "La Gente for Grijalva"
+    assert normalize_committee("Friends of Matt Gaetz_.**") == "Friends of Matt Gaetz"
+    # interior emphasis is left alone (narrow rule)
+    assert normalize_committee("**Mike Collins** for Senate") == "**Mike Collins** for Senate"
+
+
+def test_normalize_committee_keeps_legit_parentheticals():
+    assert normalize_committee("Maggie for NH (A Joint Fundraising Committee)") == (
+        "Maggie for NH (A Joint Fundraising Committee)"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Tactical USA (inferred from sender/signature as no disclaimer is present)",
+        "None (No disclaimer found)",
+        "None identified (No disclaimer text present)",
+        "Gina Hinojosa for Governor (inferred from signature and content)",
+        "Some PAC (from sender name)",
+    ],
+)
+def test_normalize_committee_rejects_inference_parentheticals(value):
+    assert normalize_committee(value) is None
+
+
 @pytest.mark.parametrize(
     "value",
     [

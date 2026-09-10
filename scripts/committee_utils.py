@@ -26,20 +26,37 @@ ABSTENTION_MARKERS = (
     "no clear", "i cannot", "there is no", "not identified",
 )
 
+# Trailing markdown emphasis ("MIKE COLLINS FOR SENATE**", "Friends of Matt
+# Gaetz_.**") is extractor leakage from the disclaimer tail, not part of the
+# name. The trailing run may mix emphasis chars with dots/whitespace; a run
+# WITHOUT any *_ ("Trump National Committee JFC, Inc.") is left verbatim.
+MD_TRAILING_RE = re.compile(r"[._*\s]*[*_][._*\s]*$")
+
+# Parentheticals that admit the value was inferred rather than quoted from
+# the disclaimer ("Tactical USA (inferred from sender/signature as no
+# disclaimer is present)"). Real committee names never carry one, so any such
+# value is rejected to None. The marker must sit inside the parens so names
+# that merely contain the word (e.g. "No Labels") stay safe.
+INFERENCE_PAREN_RE = re.compile(r"\(([^()]{1,200})\)")
+INFERENCE_PAREN_MARKERS = ("inferred", "no disclaimer", "from sender", "signature")
+
 
 def normalize_committee(value):
     """Return a clean committee name, or None for unknown/empty/garbage values.
 
-    Real names are written verbatim (stripped only). Values are rejected to None
-    when they are unknown/empty, absurdly long (a rambling model response),
-    contain DSPy ChatAdapter field markers ("[[", "##") that leak from
-    misbehaving models, or read as a natural-language "I can't tell" non-answer.
+    Real names are written verbatim (stripped only, plus trailing markdown
+    emphasis removed). Values are rejected to None when they are unknown/empty,
+    absurdly long (a rambling model response), contain DSPy ChatAdapter field
+    markers ("[[", "##") that leak from misbehaving models, read as a
+    natural-language "I can't tell" non-answer, or carry a parenthetical
+    admitting they were inferred rather than read from the disclaimer.
     """
     if value is None:
         return None
     stripped = str(value).strip()
     if stripped.lower() in UNKNOWN_VALUES:
         return None
+    stripped = MD_TRAILING_RE.sub("", stripped).strip()
     if len(stripped) > MAX_COMMITTEE_LEN:
         return None
     if "[[" in stripped or "##" in stripped:
@@ -47,6 +64,10 @@ def normalize_committee(value):
     low = stripped.lower()
     if any(marker in low for marker in ABSTENTION_MARKERS):
         return None
+    for inner in INFERENCE_PAREN_RE.findall(stripped):
+        inner_low = inner.lower()
+        if any(marker in inner_low for marker in INFERENCE_PAREN_MARKERS):
+            return None
     # Structural garbage: email addresses, URLs, over-long word counts, or
     # values with no letters are never real committee names.
     if "@" in stripped:
