@@ -83,31 +83,32 @@ uv run --with ijson python backfill_committees.py             # write changes
 is still `null` and runs each through
 [`scripts/identify_committee.py`](scripts/identify_committee.py), a DSPy module
 that first parses the "Paid for by ..." disclaimer deterministically and falls
-back to an LLM (via [SiliconFlow](https://siliconflow.com)'s OpenAI-compatible
-API) only when that fails:
+back to an LLM (via a local [Ollama](https://ollama.com)) only when that fails:
 
 ```bash
-export SILICONFLOW_API_KEY=...
 uv run --group enrich python scripts/enrich_committees.py --month 2026-02
 ```
 
 Options:
 - `--month YYYY-MM` — month to process (default: previous calendar month)
 - `--since / --until YYYY-MM-DD` — explicit date range instead of `--month`
-- `--model` — model id for the LLM fallback (default: `Qwen/Qwen3.5-9B`)
-- `--api-base` — OpenAI-compatible base URL (default: `https://api.siliconflow.com/v1`;
-  pass `http://localhost:11434` to use a local [Ollama](https://ollama.com) instead)
-- `--api-key` — API key (default: `$SILICONFLOW_API_KEY`)
-- `--workers N` — concurrent LLM workers per day (with Ollama, also set `OLLAMA_NUM_PARALLEL`)
+- `--model` — model id for the LLM fallback (default: `qwen3.5:9b`)
+- `--api-base` — LLM API base URL (default: `http://localhost:11434`, a local
+  [Ollama](https://ollama.com); pass `https://api.siliconflow.com/v1` to use
+  [SiliconFlow](https://siliconflow.com) instead)
+- `--api-key` — API key (default: `$SILICONFLOW_API_KEY`; only needed for remote providers)
+- `--workers N` — concurrent LLM workers per day (default: `4`; with Ollama, also
+  set `OLLAMA_NUM_PARALLEL` to at least this)
 - `--limit N` — cap records processed, useful for a smoke test
 - `--allow-thinking` — keep model reasoning on (for non-thinking instruct models)
 - `--dry-run` — identify committees but don't write files
 
-Requires the `enrich` dependency group (`uv sync --group enrich`) and a
-SiliconFlow API key in `SILICONFLOW_API_KEY`. Each day file is
-rewritten as it finishes, so an interrupted run resumes cleanly. Unknown results
-are stored as `null` (indistinguishable from "not yet processed"), so re-running
-a month retries any records still unresolved.
+Requires the `enrich` dependency group (`uv sync --group enrich`) and a local
+Ollama serving the model (`ollama pull qwen3.5:9b`). To use SiliconFlow instead,
+pass `--api-base https://api.siliconflow.com/v1` with `SILICONFLOW_API_KEY` set.
+Each day file is rewritten as it finishes, so an interrupted run resumes cleanly.
+Unknown results are stored as `null` (indistinguishable from "not yet
+processed"), so re-running a month retries any records still unresolved.
 
 **Model choice matters a lot.** Only ~25% of records reach the LLM fallback, but
 those calls dominate runtime. Thinking is disabled by default (SiliconFlow's
