@@ -147,9 +147,14 @@ committee comes from the disclaimer text *only* — never the sender's name.
 ([LLM-Extraction-Challenge](https://github.com/dwillis/LLM-Extraction-Challenge)):
 
 ```bash
-uv run python scripts/eval_committees.py                          # stored + regex
+uv run python scripts/eval_committees.py                          # stored + regex + entity
 uv run --group enrich python scripts/eval_committees.py --model qwen3:4b
 ```
+
+The `entity` section scores *identity* resolution: whether the stored
+`committee_fec_id`/`committee_canonical` on each gold-joined record resolves to
+the same entity the gold committee resolves to — grouping accuracy, not string
+equality.
 
 **One-time data sweep** — adds `committee_source`, recovers committees from
 missed disclaimers, nulls garbage (idempotent; run the dry-run first):
@@ -214,7 +219,9 @@ Decisions: **A** adopt an FEC candidate · **N** new non-federal entity (+type) 
 Every applied decision is upgraded to `status: human`; then rerun
 `backfill_fec_ids.py` to propagate it to the archive.
 
-**Validation report** — tiers every labeled record and builds a review queue:
+**Validation report** — tiers every labeled record and builds a review queue,
+with the archive's canonical-coverage headline (share of records carrying a
+resolved identity):
 
 ```bash
 uv run python scripts/validate_committees.py  # state/validation/{report.md,review_queue.csv}

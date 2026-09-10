@@ -296,7 +296,9 @@ def _add_sender_mention(tracker, rec, date_key):
     key = committee_group_key(rec)
     if not key:
         return
-    display[key][str(committee).strip()] += 1
+    # the registry's frozen canonical name is the display spelling; verbatim
+    # variants only surface for records no entity resolved
+    display[key][str(rec.get("committee_canonical") or committee).strip()] += 1
     week = _week_start(date_key)
     text = mention_text(rec)
     for slug, patterns in compiled.items():

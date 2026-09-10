@@ -135,7 +135,13 @@ def test_committee_group_key_prefers_fec_id_then_falls_back_to_name():
     a = {"committee": "Trump National Committee JFC, Inc.", "committee_fec_id": "C00873893"}
     b = {"committee": "Trump National Committee JFC Inc", "committee_fec_id": "C00873893"}
     assert committee_group_key(a) == committee_group_key(b) == "fec:C00873893"
-    # No FEC ID -> fall back to the normalized name key.
+    # A registry canonical name groups verbatim variants of a non-federal entity.
+    n1 = {"committee": "Democratic Party of Georgia",
+          "committee_canonical": "Democratic Party of Georgia"}
+    n2 = {"committee": "DPG", "committee_canonical": "Democratic Party of Georgia"}
+    assert committee_group_key(n1) == committee_group_key(n2) == (
+        "canon:democratic party of georgia")
+    # No FEC ID or canonical -> fall back to the normalized name key.
     assert committee_group_key({"committee": "Some State PAC"}) == committee_key("Some State PAC")
     assert committee_group_key({"committee": None}) == ""
 

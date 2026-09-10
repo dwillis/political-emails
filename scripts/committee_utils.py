@@ -103,12 +103,17 @@ def committee_group_key(rec):
 
     Prefers the stored FEC committee ID (set by backfill_fec_ids) so name
     variants of the same federal committee ("...JFC, Inc." vs "...JFC Inc")
-    group under one identity. Falls back to committee_key() for records with no
-    FEC match (state/local committees). Returns "" when there is no committee.
+    group under one identity. Next, a registry canonical name (non-federal
+    entities: state parties, newsletters, c4s) groups its verbatim variants.
+    Falls back to committee_key() for records with no resolved entity.
+    Returns "" when there is no committee.
     """
     fec_id = rec.get("committee_fec_id")
     if fec_id:
         return f"fec:{fec_id}"
+    canonical = rec.get("committee_canonical")
+    if canonical:
+        return f"canon:{committee_key(canonical)}"
     return committee_key(rec.get("committee"))
 
 
