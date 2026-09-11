@@ -393,3 +393,10 @@ GitHub Actions runs daily:
 ## License
 
 MIT
+
+### Donation-link pilot
+
+See [DONATION_PILOT.md](DONATION_PILOT.md) for a local, resumable pilot that
+selects disclaimer-bearing emails with identified committees, captures linked
+fundraising pages, and extracts recipient and explicit equal-split evidence into
+separate JSON files. Run `uv run python scripts/donation_pilot.py select` to start.

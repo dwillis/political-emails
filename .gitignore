@@ -24,3 +24,7 @@ topic_model/
 state/gold/
 state/fec/
 state/validation/
+
+# Donation pilot: private tracking links and captured page evidence.
+.firecrawl/
+state/donation_pilot/
