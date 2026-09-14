@@ -28,3 +28,6 @@ state/validation/
 # Donation pilot: private tracking links and captured page evidence.
 .firecrawl/
 state/donation_pilot/
+
+# Generated local entity metadata and model responses.
+metadata/entities/

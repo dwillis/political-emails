@@ -1,0 +1,10 @@
+{
+  "entities": [
+    {
+      "id": "person:donald_trump",
+      "type": "person",
+      "name": "Donald Trump",
+      "aliases": ["Donald J. Trump", "Donald J Trump", "President Trump"]
+    }
+  ]
+}
