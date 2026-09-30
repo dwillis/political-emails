@@ -18,9 +18,9 @@ def test_native_request_disables_thinking_and_requires_schema():
     assert request['format'] == ee.SCHEMA
 
 
-def test_footer_removed_subject_preserved():
+def test_footer_preserved_for_context_labeling():
     fields = ee.input_fields({'subject': 'Jane Smith', 'clean_body': 'Help Jane Smith. Paid for by Jane Smith for Congress. Unsubscribe'})
-    assert fields == {'subject': 'Jane Smith', 'campaign_body': 'Help Jane Smith. '}
+    assert fields == {'subject': 'Jane Smith', 'campaign_body': 'Help Jane Smith. Paid for by Jane Smith for Congress. Unsubscribe'}
 
 
 def test_mentions_have_exact_offsets_and_deduplicate():
@@ -194,3 +194,52 @@ def test_default_workers_and_validation(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         ee.main()
     assert exc.value.code == 2
+
+
+def test_registry_change_reuses_extraction_without_model_call(tmp_path, monkeypatch):
+    args, data, rec, calls = setup_run(tmp_path, monkeypatch)
+    ee.run(args)
+    args.registry.write_text(json.dumps({'entities':[{'id':'person:jane_smith','type':'person','name':'Jane Smith','aliases':[]}]}))
+    ee.run(args)
+    assert len(calls)==1
+    row=json.loads((args.output_dir/'2026/08.json').read_text())['records']['abc']
+    assert row['entities'][0]['entity_id']=='person:jane_smith'
+    assert row['extracted_entities'][0]['entity_id'] is None
+
+
+def test_resolution_failure_cannot_leave_entities_on_failed_record(tmp_path, monkeypatch):
+    args, data, rec, _ = setup_run(tmp_path, monkeypatch)
+    rec['clean_body']='Jane Smith and Mary Jones'
+    payload={'entities':[{'name':'Jane Smith','type':'person','mentions':[{'field':'campaign_body','text':n} for n in ['Jane Smith','Mary Jones']]}]}
+    monkeypatch.setattr(ee,'request_json',lambda *a,**k:{'done':True,'message':{'content':json.dumps(payload)}})
+    registry={('person',n.casefold()):{'id':str(i),'name':n,'type':'person'} for i,n in enumerate(['Jane Smith','Mary Jones'])}
+    row=ee.prepare_record(rec,data,args.model,'digest','registry')
+    result=ee.process_record(row,args,registry)
+    assert result['processing_status']=='failed'
+    assert result['entities'] is None
+
+
+def test_unchanged_cached_records_do_not_rewrite_monthly_sidecar(tmp_path, monkeypatch):
+    args, data, rec, _ = setup_run(tmp_path, monkeypatch)
+    ee.run(args)
+    writes=[]
+    original=ee.write_json
+    def write(path,value):
+        writes.append(path)
+        original(path,value)
+    monkeypatch.setattr(ee,'write_json',write)
+    ee.run(args)
+    assert writes==[args.output_dir/'report.json']
+
+
+def test_output_limited_response_preserves_evidence_but_cannot_be_revalidated(tmp_path, monkeypatch):
+    args, data, rec, _ = setup_run(tmp_path, monkeypatch)
+    raw = json.dumps({'entities': []})
+    monkeypatch.setattr(ee, 'request_json', lambda *a, **k: {'done': True, 'done_reason': 'length', 'message': {'content': raw}, 'eval_count': 8192})
+    row = ee.process_record(ee.prepare_record(rec, data, args.model, 'digest', 'registry'), args, {})
+    assert row['processing_status'] == 'failed'
+    assert row['entities'] is None
+    assert row['raw_response'] == raw
+    assert row['usage']['eval_count'] == 8192
+    with pytest.raises(ValueError, match='output-limited'):
+        ee.validate_record_response(row, {})
