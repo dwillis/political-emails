@@ -83,31 +83,32 @@ uv run --with ijson python backfill_committees.py             # write changes
 is still `null` and runs each through
 [`scripts/identify_committee.py`](scripts/identify_committee.py), a DSPy module
 that first parses the "Paid for by ..." disclaimer deterministically and falls
-back to an LLM (via [SiliconFlow](https://siliconflow.com)'s OpenAI-compatible
-API) only when that fails:
+back to an LLM (via a local [Ollama](https://ollama.com)) only when that fails:
 
 ```bash
-export SILICONFLOW_API_KEY=...
 uv run --group enrich python scripts/enrich_committees.py --month 2026-02
 ```
 
 Options:
 - `--month YYYY-MM` — month to process (default: previous calendar month)
 - `--since / --until YYYY-MM-DD` — explicit date range instead of `--month`
-- `--model` — model id for the LLM fallback (default: `Qwen/Qwen3.5-9B`)
-- `--api-base` — OpenAI-compatible base URL (default: `https://api.siliconflow.com/v1`;
-  pass `http://localhost:11434` to use a local [Ollama](https://ollama.com) instead)
-- `--api-key` — API key (default: `$SILICONFLOW_API_KEY`)
-- `--workers N` — concurrent LLM workers per day (with Ollama, also set `OLLAMA_NUM_PARALLEL`)
+- `--model` — model id for the LLM fallback (default: `qwen3.5:9b`)
+- `--api-base` — LLM API base URL (default: `http://localhost:11434`, a local
+  [Ollama](https://ollama.com); pass `https://api.siliconflow.com/v1` to use
+  [SiliconFlow](https://siliconflow.com) instead)
+- `--api-key` — API key (default: `$SILICONFLOW_API_KEY`; only needed for remote providers)
+- `--workers N` — concurrent LLM workers per day (default: `4`; with Ollama, also
+  set `OLLAMA_NUM_PARALLEL` to at least this)
 - `--limit N` — cap records processed, useful for a smoke test
 - `--allow-thinking` — keep model reasoning on (for non-thinking instruct models)
 - `--dry-run` — identify committees but don't write files
 
-Requires the `enrich` dependency group (`uv sync --group enrich`) and a
-SiliconFlow API key in `SILICONFLOW_API_KEY`. Each day file is
-rewritten as it finishes, so an interrupted run resumes cleanly. Unknown results
-are stored as `null` (indistinguishable from "not yet processed"), so re-running
-a month retries any records still unresolved.
+Requires the `enrich` dependency group (`uv sync --group enrich`) and a local
+Ollama serving the model (`ollama pull qwen3.5:9b`). To use SiliconFlow instead,
+pass `--api-base https://api.siliconflow.com/v1` with `SILICONFLOW_API_KEY` set.
+Each day file is rewritten as it finishes, so an interrupted run resumes cleanly.
+Unknown results are stored as `null` (indistinguishable from "not yet
+processed"), so re-running a month retries any records still unresolved.
 
 **Model choice matters a lot.** Only ~25% of records reach the LLM fallback, but
 those calls dominate runtime. Thinking is disabled by default (SiliconFlow's
@@ -146,9 +147,14 @@ committee comes from the disclaimer text *only* — never the sender's name.
 ([LLM-Extraction-Challenge](https://github.com/dwillis/LLM-Extraction-Challenge)):
 
 ```bash
-uv run python scripts/eval_committees.py                          # stored + regex
+uv run python scripts/eval_committees.py                          # stored + regex + entity
 uv run --group enrich python scripts/eval_committees.py --model qwen3:4b
 ```
+
+The `entity` section scores *identity* resolution: whether the stored
+`committee_fec_id`/`committee_canonical` on each gold-joined record resolves to
+the same entity the gold committee resolves to — grouping accuracy, not string
+equality.
 
 **One-time data sweep** — adds `committee_source`, recovers committees from
 missed disclaimers, nulls garbage (idempotent; run the dry-run first):
@@ -159,26 +165,63 @@ uv run python scripts/apply_committee_fixes.py
 ```
 
 **FEC cross-reference** — matches committee names to the FEC committee master
-(a confidence signal; only *exact* matches are trusted, fuzzy are review hints):
+(a confidence signal; the auto tiers — exact and the unique strip/subset
+ladder — are trusted, ambiguous ones are review hints):
 
 ```bash
 uv run python scripts/fec_match.py            # writes state/fec/fec_matches.csv
 ```
 
 **Persisting the FEC ID** — [`scripts/backfill_fec_ids.py`](scripts/backfill_fec_ids.py)
-stores each record's exact FEC committee ID as `committee_fec_id` (or `null` when
-there's no committee or no exact match). This gives every federal committee a
-canonical identity, so downstream aggregation (e.g. the sender-mention tracker)
-groups name variants — `"Trump National Committee JFC, Inc."` vs `"...JFC Inc"` —
-that resolve to the same real committee. Idempotent; the daily collection workflow
-runs it automatically.
+stores each record's resolved committee as `committee_fec_id` plus the entity's
+frozen display name as `committee_canonical` (both `null` when there's no
+committee or no confident match). Resolution is **registry-first**: a name whose
+normalized form is an alias in `config/committee_registry.json` always wins, so
+human decisions survive recomputation; otherwise the guarded tier ladder in
+[`scripts/fec_match.py`](scripts/fec_match.py) runs (exact → strip-unique →
+subset-unique → acronym-unique → cand-link), cycle- and office-guarded, with
+multiple candidates at any tier stopping the ladder as `ambiguous`. Review-only
+tiers (acronym-unique, cand-link) and ambiguous/none results never auto-set —
+unresolved names land in a frequency-ordered review CSV instead. This gives
+every federal committee a canonical identity, so downstream aggregation groups
+name variants that resolve to the same real committee. Idempotent; the daily
+collection workflow runs it automatically.
 
 ```bash
 uv run python scripts/backfill_fec_ids.py --dry-run   # report only
-uv run python scripts/backfill_fec_ids.py             # write committee_fec_id
+uv run python scripts/backfill_fec_ids.py             # write the fields
 ```
 
-**Validation report** — tiers every labeled record and builds a review queue:
+**Committee registry** — [`config/committee_registry.json`](config/committee_registry.json)
+is the source of truth for canonical entities, federal or not. Each entity has
+an `id` (FEC ID, or `nfd:<slug>` for non-federal), a `type` (federal-candidate,
+federal-pac, party-committee, joint-fundraising, state-party, state-candidate,
+newsletter, c4, other, noise), a frozen display `name`, `party`, and verbatim
+`aliases`. Two normalized aliases resolving to different entities are a hard
+error (the "SAVE AMERICA" registered-twice case stays ambiguous rather than
+silently picking one). [`scripts/build_committee_registry.py`](scripts/build_committee_registry.py)
+seeds `status: auto` federal entities from one archive scan and clusters the
+unresolved names into `state/validation/registry_proposals.csv`; auto rebuilds
+never overwrite `status: human` entries.
+
+**Entity review loop** — triage the proposals in a browser, commit the decisions:
+
+```bash
+uv run python scripts/build_committee_registry.py          # refresh registry + proposals
+uv run python scripts/build_entity_review.py --queue-cap 500
+# open state/validation/entity_review.html, triage, "Export decisions CSV"
+uv run python scripts/apply_registry_decisions.py --decisions entity_decisions.csv
+git add config/committee_registry.json && git commit
+```
+
+Decisions: **A** adopt an FEC candidate · **N** new non-federal entity (+type) ·
+**M** merge into an existing registry entity · **X** noise · **S** skip.
+Every applied decision is upgraded to `status: human`; then rerun
+`backfill_fec_ids.py` to propagate it to the archive.
+
+**Validation report** — tiers every labeled record and builds a review queue,
+with the archive's canonical-coverage headline (share of records carrying a
+resolved identity):
 
 ```bash
 uv run python scripts/validate_committees.py  # state/validation/{report.md,review_queue.csv}
@@ -348,7 +391,8 @@ Each line in a JSONL file is a JSON record with these fields:
 | `urls` | array | URLs found in the email body |
 | `committee` | string/null | Political committee that sent the email (LLM-extracted; `null` when unknown or not yet determined) |
 | `committee_source` | string/null | How `committee` was derived: `disclaimer`, `llm:<model>`, `backfill`, or `null` |
-| `committee_fec_id` | string/null | Canonical FEC committee ID from an exact name match (see FEC cross-reference); `null` when no committee or no match |
+| `committee_fec_id` | string/null | Canonical FEC committee ID, resolved registry-first then via the guarded tier ladder (see Committee registry below); `null` when no committee, no match, or a review-only match |
+| `committee_canonical` | string/null | The resolved entity's frozen display name from `config/committee_registry.json` (e.g. `DNC` for every Democratic National Committee variant); `null` when unresolved or the entity is typed `noise` |
 | `party_source` | string/null | How `party` was derived (see Party derivation below) |
 
 ## Automation
@@ -360,3 +404,20 @@ GitHub Actions runs daily:
 ## License
 
 MIT
+
+### Donation-link pilot
+
+See [DONATION_PILOT.md](DONATION_PILOT.md) for a local, resumable pilot that
+selects disclaimer-bearing emails with identified committees, captures linked
+fundraising pages, and extracts recipient and explicit equal-split evidence into
+separate JSON files. Run `uv run python scripts/donation_pilot.py select` to start.
+
+### Entity extraction sidecars
+
+[ENTITY_EXTRACTION.md](ENTITY_EXTRACTION.md) documents local, evidence-backed
+entity extraction into monthly JSON sidecars. It defaults to Ollama
+`qwen3.8:latest` with thinking disabled and leaves source emails unchanged:
+
+```bash
+uv run python scripts/extract_entities.py --limit 100
+```

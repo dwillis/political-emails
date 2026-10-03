@@ -25,7 +25,8 @@ from datetime import datetime
 from pathlib import Path
 
 from committee_extract import extract_committee, looks_confident
-from committee_utils import norm_label
+from committee_registry import alias_index, fec_index as registry_fec_index, load_registry, resolve_name
+from committee_utils import committee_group_key, committee_key, norm_label
 from utils import DATA_DIR, load_jsonl
 
 GOLD_URL = (
@@ -113,6 +114,54 @@ def score(pairs, predict, label):
     return misses
 
 
+def score_entity(joined, fec_idx):
+    """Score stored entity resolution against the gold committee's entity.
+
+    Both sides resolve to an ENTITY, not a string: the record through its
+    stored committee_group_key (registry-first sweep output), the gold string
+    through the registry alias index with an FEC-ladder fallback. Scored on
+    rows where both sides resolved; also reports the stored side's coverage.
+    """
+    from fec_match import REVIEW_ONLY_TIERS, resolve_committee
+
+    registry = load_registry()
+    alias_map = alias_index(registry)
+    n = len(joined)
+    stored_resolved = gold_resolved = both = hits = 0
+    misses = []
+    for gold, rec in joined:
+        rec_key = committee_group_key(rec)
+        if rec.get("committee_fec_id") or rec.get("committee_canonical"):
+            stored_resolved += 1
+        ent = resolve_name(registry, gold, alias_map)
+        gold_key = None
+        if ent:
+            gold_key = (f"fec:{ent['fec_id']}" if ent.get("fec_id")
+                        else f"canon:{committee_key(ent['name'])}")
+        else:
+            tier, fid, _c = resolve_committee(
+                gold, {"date": "2024-11-15T00:00:00"}, fec_idx)
+            if fid and tier not in REVIEW_ONLY_TIERS:
+                gold_key = f"fec:{fid}"
+        if rec_key and gold_key:
+            both += 1
+            if rec_key == gold_key:
+                hits += 1
+            elif len(misses) < 25:
+                misses.append((gold, rec_key, gold_key))
+        if gold_key:
+            gold_resolved += 1
+    print(f"\n=== entity resolution: stored identity vs gold (n={n}) ===")
+    print(f"  stored side resolved (fec id or canonical): "
+          f"{stored_resolved}/{n} ({stored_resolved/n*100:.1f}%)")
+    print(f"  gold side resolves to an entity:            "
+          f"{gold_resolved}/{n} ({gold_resolved/n*100:.1f}%)")
+    if both:
+        print(f"  same entity on both-resolved rows:          {hits}/{both} "
+              f"({hits/both*100:.1f}%)")
+    return misses
+
+
 def score_party(pairs):
     """Score stored archive party against gold party (rows with a gold party)."""
     n = len(pairs)
@@ -174,11 +223,18 @@ def main():
     regex_pairs = [(g, rec.get("body") or "") for g, rec in joined]
     m2 = score(regex_pairs, regex_predict, "regex extractor (fixed)")
 
-    for label, misses in (("stored", m1), ("regex", m2)):
+    # stored entity resolution (registry-first sweep output) vs gold
+    from fec_match import download_fec, load_fec_index
+
+    download_fec()
+    fec_idx, _buckets = load_fec_index()
+    m4 = score_entity(joined, fec_idx)
+
+    for label, misses in (("stored", m1), ("regex", m2), ("entity", m4)):
         if args.show_misses:
             print(f"\n  {label} confusion (gold | pred):")
-            for gold, pred in misses[: args.show_misses]:
-                print(f"    {gold!r:40} | {pred!r}")
+            for row in misses[: args.show_misses]:
+                print("    " + " | ".join(repr(c) for c in row))
 
     score_party(party_pairs)
 

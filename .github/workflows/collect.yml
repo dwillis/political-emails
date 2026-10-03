@@ -63,7 +63,14 @@ jobs:
                 break
               fi
               echo "Push failed (attempt ${attempt}), rebasing on remote and retrying..."
-              git pull --rebase origin main
+              if ! git pull --rebase origin main; then
+                # Day files conflict when local enrichment rewrote them; union by message_id
+                (cd scripts && uv run python merge_jsonl_conflicts.py)
+                GIT_EDITOR=true git rebase --continue
+                (cd scripts && uv run python backfill_fec_ids.py)
+                git add data/ state/
+                git diff --staged --quiet || git commit -m "Re-run FEC backfill after merge"
+              fi
             done
             if [ "$pushed" != "true" ]; then
               echo "::error::Failed to push after 5 attempts"

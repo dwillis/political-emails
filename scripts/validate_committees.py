@@ -2,7 +2,9 @@
 
 Tiers:
   CONFIRMED   committee_source == "disclaimer" (came from the "Paid for by"
-              text, which is authoritative) OR an exact FEC committee match.
+              text, which is authoritative); the name resolves in the committed
+              committee registry (canonical entity, federal or not); OR an
+              exact FEC committee match.
   CONSISTENT  matches the dominant committee on a candidate-owned domain.
   SUSPECT     high-priority for human review:
                 - contradicts-disclaimer: a confident disclaimer extract exists
@@ -11,7 +13,10 @@ Tiers:
                 - garbage: fails normalize_committee (should be ~0 post-sweep);
                 - minority (<10%) label on an owned domain.
   UNVERIFIED  labeled but unconfirmable (backfill/llm on broker/small domains,
-              no FEC hit) -- honest "we don't know", not an error claim.
+              no resolved entity) -- honest "we don't know", not an error claim.
+
+The report's headline metric is canonical coverage: the share of the archive
+carrying a resolved identity (FEC id or registry canonical).
 
     uv run python scripts/validate_committees.py
     uv run python scripts/validate_committees.py --skip-fec --queue-cap 300
@@ -23,7 +28,13 @@ import random
 from collections import Counter, defaultdict
 
 from committee_extract import extract_committee, looks_confident
-from committee_utils import iter_day_files, norm_label, normalize_committee, same_committee
+from committee_utils import (
+    committee_group_key,
+    iter_day_files,
+    norm_label,
+    normalize_committee,
+    same_committee,
+)
 from utils import DATA_DIR, load_jsonl
 
 OWNED_MIN_RECORDS = 20
@@ -65,9 +76,12 @@ def classify(rec, domain_counts, fec_exact):
     if normalize_committee(committee) is None:
         return ("SUSPECT", "garbage")
 
-    # CONFIRMED via authoritative disclaimer or exact FEC.
+    # CONFIRMED via authoritative disclaimer, the committed registry, or an
+    # exact FEC match.
     if source == "disclaimer":
         return ("CONFIRMED", "disclaimer")
+    if rec.get("committee_canonical") or rec.get("committee_fec_id"):
+        return ("CONFIRMED", "registry")
     if fec_exact(committee):
         return ("CONFIRMED", "fec-exact")
 
@@ -117,9 +131,18 @@ def main():
     reasons = Counter()
     queue = defaultdict(list)  # reason -> [rows]
     labeled = 0
+    total = fec_n = canon_n = 0
+    identities = set()
 
     for path in iter_day_files():
         for rec in load_jsonl(path):
+            total += 1
+            if rec.get("committee"):
+                identities.add(committee_group_key(rec))
+            if rec.get("committee_fec_id"):
+                fec_n += 1
+            elif rec.get("committee_canonical"):
+                canon_n += 1
             if not rec.get("committee"):
                 continue
             labeled += 1
@@ -156,8 +179,15 @@ def main():
         w.writerows(sampled)
 
     # Report.
+    resolved = fec_n + canon_n
     lines = ["# Committee validation report\n"]
     lines.append(f"Labeled records: {labeled:,}\n")
+    lines.append("## Canonical coverage (headline)\n")
+    lines.append(f"- **Resolved identity**: {resolved:,} of {total:,} records "
+                 f"({resolved / total * 100:.1f}%) — "
+                 f"{fec_n:,} with an FEC ID, {canon_n:,} via a non-federal "
+                 f"registry entity")
+    lines.append(f"- **Distinct committee identities**: {len(identities):,}\n")
     lines.append("## Confidence tiers\n")
     for tier in ("CONFIRMED", "CONSISTENT", "UNVERIFIED", "SUSPECT"):
         n = tiers[tier]

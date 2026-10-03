@@ -3,16 +3,16 @@
 Scans daily JSONL files for records without a committee (null/missing) and runs
 each one through scripts/identify_committee.py, which first parses the
 "Paid for by ..." disclaimer deterministically and falls back to an LLM
-(via DSPy + SiliconFlow's OpenAI-compatible API) only when that fails. Results
+(via DSPy + a local Ollama) only when that fails. Results
 are written back to the archive. Intended to be run manually each month --
 deliberately NOT in GitHub Actions.
 
     uv run --group enrich python scripts/enrich_committees.py --month 2026-02
     uv run --group enrich python scripts/enrich_committees.py --since 2026-02-01 --until 2026-02-28
 
-Requires DSPy and a SiliconFlow API key in SILICONFLOW_API_KEY (or --api-key).
-Point --api-base at a local Ollama (http://localhost:11434) to use a local model
-instead.
+Requires DSPy and a local Ollama at http://localhost:11434 (the default). To
+use SiliconFlow instead, pass --api-base https://api.siliconflow.com/v1 with
+SILICONFLOW_API_KEY (or --api-key) set.
 
 Resumability: each day file is rewritten as soon as it finishes, so a crash
 loses at most the in-progress day, and re-running skips records already filled.
@@ -31,10 +31,10 @@ from datetime import date, timedelta
 from committee_utils import needs_committee, normalize_committee
 from utils import DATA_DIR, load_jsonl, save_jsonl
 
-DEFAULT_MODEL = "Qwen/Qwen3.5-9B"
-DEFAULT_API_BASE = "https://api.siliconflow.com/v1"
-API_KEY_ENV = "SILICONFLOW_API_KEY"
+DEFAULT_MODEL = "qwen3.5:9b"
 OLLAMA_URL = "http://localhost:11434"
+DEFAULT_API_BASE = OLLAMA_URL
+API_KEY_ENV = "SILICONFLOW_API_KEY"
 
 
 def raise_fd_limit(target=16384):
@@ -63,10 +63,11 @@ def is_ollama(api_base):
 def configure_dspy(model, api_base=DEFAULT_API_BASE, disable_thinking=True, api_key=None):
     """Point DSPy at the LLM used for the module's fallback.
 
-    SiliconFlow (the default) speaks the OpenAI chat API, so it goes through
-    litellm's "openai/" provider with an explicit api_base. A localhost/11434
-    api_base switches to Ollama instead, which keeps eval_committees.py and
-    optimize_fallback.py working against a local model.
+    Ollama (the default) goes through litellm's "ollama_chat/" provider with an
+    explicit api_base. Any other api_base is treated as SiliconFlow-style --
+    OpenAI chat API -- and goes through litellm's "openai/" provider instead,
+    which keeps eval_committees.py and optimize_fallback.py working against
+    either backend.
 
     Reasoning ("thinking") models are ~200x slower here and mangle the
     structured output, so thinking is disabled by default: SiliconFlow takes
@@ -179,10 +180,12 @@ def main():
     group.add_argument("--until", help="YYYY-MM-DD end (inclusive)")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Model id for the LLM fallback")
     parser.add_argument("--api-base", default=DEFAULT_API_BASE,
-                        help=f"OpenAI-compatible base URL (default SiliconFlow; use {OLLAMA_URL} for local Ollama)")
+                        help=f"LLM API base URL (default: local Ollama at {OLLAMA_URL}; "
+                             "use https://api.siliconflow.com/v1 for SiliconFlow)")
     parser.add_argument("--api-key", default=None, help=f"API key (default: ${API_KEY_ENV})")
     parser.add_argument("--limit", type=int, default=None, help="Max records to process (for testing)")
-    parser.add_argument("--workers", type=int, default=1, help="Concurrent LLM workers per day (for Ollama, also set OLLAMA_NUM_PARALLEL>1)")
+    parser.add_argument("--workers", type=int, default=4,
+                        help="Concurrent LLM workers per day (with Ollama, also set OLLAMA_NUM_PARALLEL to at least this)")
     parser.add_argument("--allow-thinking", action="store_true", help="Don't disable model reasoning (needed for non-thinking instruct models)")
     parser.add_argument("--skip-party", action="store_true", help="Don't derive party when filling committees")
     parser.add_argument("--dry-run", action="store_true", help="Identify but don't write files")

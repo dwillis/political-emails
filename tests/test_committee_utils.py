@@ -64,6 +64,35 @@ def test_normalize_committee_keeps_names_with_innocuous_words():
     assert normalize_committee("Friends of Cory Booker") == "Friends of Cory Booker"
 
 
+def test_normalize_committee_strips_trailing_markdown_emphasis():
+    # extractor leakage from the disclaimer tail
+    assert normalize_committee("MIKE COLLINS FOR SENATE**") == "MIKE COLLINS FOR SENATE"
+    assert normalize_committee("La Gente for Grijalva_") == "La Gente for Grijalva"
+    assert normalize_committee("Friends of Matt Gaetz_.**") == "Friends of Matt Gaetz"
+    # interior emphasis is left alone (narrow rule)
+    assert normalize_committee("**Mike Collins** for Senate") == "**Mike Collins** for Senate"
+
+
+def test_normalize_committee_keeps_legit_parentheticals():
+    assert normalize_committee("Maggie for NH (A Joint Fundraising Committee)") == (
+        "Maggie for NH (A Joint Fundraising Committee)"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Tactical USA (inferred from sender/signature as no disclaimer is present)",
+        "None (No disclaimer found)",
+        "None identified (No disclaimer text present)",
+        "Gina Hinojosa for Governor (inferred from signature and content)",
+        "Some PAC (from sender name)",
+    ],
+)
+def test_normalize_committee_rejects_inference_parentheticals(value):
+    assert normalize_committee(value) is None
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -106,7 +135,13 @@ def test_committee_group_key_prefers_fec_id_then_falls_back_to_name():
     a = {"committee": "Trump National Committee JFC, Inc.", "committee_fec_id": "C00873893"}
     b = {"committee": "Trump National Committee JFC Inc", "committee_fec_id": "C00873893"}
     assert committee_group_key(a) == committee_group_key(b) == "fec:C00873893"
-    # No FEC ID -> fall back to the normalized name key.
+    # A registry canonical name groups verbatim variants of a non-federal entity.
+    n1 = {"committee": "Democratic Party of Georgia",
+          "committee_canonical": "Democratic Party of Georgia"}
+    n2 = {"committee": "DPG", "committee_canonical": "Democratic Party of Georgia"}
+    assert committee_group_key(n1) == committee_group_key(n2) == (
+        "canon:democratic party of georgia")
+    # No FEC ID or canonical -> fall back to the normalized name key.
     assert committee_group_key({"committee": "Some State PAC"}) == committee_key("Some State PAC")
     assert committee_group_key({"committee": None}) == ""
 
