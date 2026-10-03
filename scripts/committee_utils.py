@@ -10,7 +10,7 @@ from utils import DATA_DIR
 
 # Values the model emits that we treat as "no committee determined" -> None.
 # Compared case-insensitively against the stripped value.
-UNKNOWN_VALUES = {"", "unknown", "none", "n/a", "null"}
+UNKNOWN_VALUES = {"", "unknown", "none", "n/a", "na", "null", "empty", "empty string"}
 
 # A real committee name is short. Anything longer is a model that rambled
 # (multi-paragraph "here is a summary..." essays) rather than answering.
@@ -40,6 +40,27 @@ MD_TRAILING_RE = re.compile(r"[._*\s]*[*_][._*\s]*$")
 INFERENCE_PAREN_RE = re.compile(r"\(([^()]{1,200})\)")
 INFERENCE_PAREN_MARKERS = ("inferred", "no disclaimer", "from sender", "signature")
 
+# Small models sometimes append their own reasoning to a correct name ("Gina
+# Hinojosa Campaign Then we end with", "DNC Then we output the completed
+# marker", "Freedom Virginia Let me write the output as"). The chatter is
+# matched case-sensitively on sentence-style capitals so real names that
+# contain a lowercase "then" ("Outrage then Action PAC") are untouched.
+CHATTER_RE = re.compile(
+    r"\s+(?:"
+    r"(?:Then|And then),?\s+(?:we|the|I|end)\b"
+    r"|(?:And then|Then)\s*$"
+    r"|(?:Let me|But note|However, note|So,? we|So the response)\b"
+    r").*$"
+)
+
+# A parenthetical where the model describes emitting an empty answer
+# ("(we output an empty string)", "(we'll put an empty string)").
+EMPTY_ANSWER_PAREN_RE = re.compile(r"\(\s*we(?:'ll)?\s+(?:output|put)\b[^()]*\)", re.IGNORECASE)
+
+# Shortest name we accept. One- and two-character values ("b", "NA", "DC")
+# are model noise, not committees.
+MIN_COMMITTEE_LEN = 3
+
 
 def normalize_committee(value):
     """Return a clean committee name, or None for unknown/empty/garbage values.
@@ -48,8 +69,10 @@ def normalize_committee(value):
     emphasis removed). Values are rejected to None when they are unknown/empty,
     absurdly long (a rambling model response), contain DSPy ChatAdapter field
     markers ("[[", "##") that leak from misbehaving models, read as a
-    natural-language "I can't tell" non-answer, or carry a parenthetical
-    admitting they were inferred rather than read from the disclaimer.
+    natural-language "I can't tell" non-answer, carry a parenthetical
+    admitting they were inferred rather than read from the disclaimer, describe
+    an empty answer ("(empty string)"), or are shorter than three characters.
+    Trailing model chatter after an otherwise real name is trimmed off.
     """
     if value is None:
         return None
@@ -57,11 +80,19 @@ def normalize_committee(value):
     if stripped.lower() in UNKNOWN_VALUES:
         return None
     stripped = MD_TRAILING_RE.sub("", stripped).strip()
+    stripped = CHATTER_RE.sub("", stripped).strip()
+    if stripped.lower() in UNKNOWN_VALUES or len(stripped) < MIN_COMMITTEE_LEN:
+        return None
     if len(stripped) > MAX_COMMITTEE_LEN:
         return None
     if "[[" in stripped or "##" in stripped:
         return None
+    # Template residue ("committee} So we output") and "(empty string)" answers.
+    if "{" in stripped or "}" in stripped:
+        return None
     low = stripped.lower()
+    if re.fullmatch(r"\(\s*empty(?:\s+string)?\s*\)", low) or EMPTY_ANSWER_PAREN_RE.search(stripped):
+        return None
     if any(marker in low for marker in ABSTENTION_MARKERS):
         return None
     for inner in INFERENCE_PAREN_RE.findall(stripped):

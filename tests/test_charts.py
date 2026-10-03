@@ -242,3 +242,13 @@ def test_line_chart_handles_single_point():
     assert svg.startswith("<svg")
     assert svg.endswith("</svg>")
     # A single point still renders a marker/polyline without crashing
+
+
+def test_horizontal_bar_chart_height_shrinks_viewbox():
+    from charts import horizontal_bar_chart
+
+    default = horizontal_bar_chart([("a", 1)], "T", "#000")
+    short = horizontal_bar_chart([("a", 1)], "T", "#000", height=230)
+
+    assert 'viewBox="0 0 800 400"' in default
+    assert 'viewBox="0 0 800 230"' in short

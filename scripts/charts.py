@@ -145,18 +145,19 @@ def vertical_bar_chart(data, title, color):
 
 # --- Horizontal bar chart -------------------------------------------------
 
-def horizontal_bar_chart(data, title, color):
+def horizontal_bar_chart(data, title, color, height=_VB_HEIGHT):
     """Render a horizontal bar chart.
 
     Args:
         data: list of (label, value) tuples, already sorted (largest first).
         title: str — chart title.
         color: str — CSS color for bars.
+        height: int — viewBox height; shrink it for charts with few bars.
 
     Returns: SVG string.
     """
     aria = f"{title}. " + ", ".join(f"{k}: {_format_int(v)}" for k, v in data)
-    parts = [_svg_open(aria)]
+    parts = [_svg_open(aria, height=height)]
 
     parts.append(
         f'<text x="{_VB_WIDTH / 2}" y="24" text-anchor="middle" '
@@ -166,7 +167,7 @@ def horizontal_bar_chart(data, title, color):
 
     if not data:
         parts.append(
-            f'<text x="{_VB_WIDTH / 2}" y="{_VB_HEIGHT / 2}" '
+            f'<text x="{_VB_WIDTH / 2}" y="{height / 2}" '
             f'text-anchor="middle" fill="{_AXIS_GRAY}">No data</text>'
         )
         parts.append("</svg>")
@@ -177,7 +178,7 @@ def horizontal_bar_chart(data, title, color):
     plot_x = _MARGIN_LEFT + label_col_w
     plot_w = _VB_WIDTH - plot_x - _MARGIN_RIGHT - value_col_w
     plot_y = _MARGIN_TOP
-    plot_h = _VB_HEIGHT - _MARGIN_TOP - _MARGIN_BOTTOM
+    plot_h = height - _MARGIN_TOP - _MARGIN_BOTTOM
 
     n = len(data)
     bar_h = min(24, (plot_h - (n - 1) * 8) / n) if n > 0 else 24

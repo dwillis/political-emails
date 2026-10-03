@@ -242,3 +242,43 @@ def test_process_single_email_includes_committee_none():
     assert "committee" in record
     assert record["committee"] is None
     assert record["committee_source"] is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "(empty string)", "( empty string )", "empty string", "(empty)", "(empty string) Then",
+        "(we output an empty string)", "(we output the string)", "(we'll put an empty string)",
+        "committee} So we output", "committee} Then, we end with",
+        "NA", "b", "DC", "US", "J6",
+    ],
+)
+def test_normalize_committee_rejects_empty_answers_and_noise(value):
+    assert normalize_committee(value) is None
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("Gina Hinojosa Campaign Then we end with", "Gina Hinojosa Campaign"),
+        ("Gina Hinojosa Campaign Then, we end with", "Gina Hinojosa Campaign"),
+        ("Gina Hinojosa Campaign Then end with", "Gina Hinojosa Campaign"),
+        ("Amanda Pusczek for Congress (AL-04) And then we have", "Amanda Pusczek for Congress (AL-04)"),
+        ("DNC Then we output the completed marker. So the response should be", "DNC"),
+        ("EMILYs List However, note: the problem says to output in the structure", "EMILYs List"),
+        ("Freedom Virginia Let me write the output as", "Freedom Virginia"),
+        ("United We Dream And then", "United We Dream"),
+        ("Outrage then Action PAC Then we end with", "Outrage then Action PAC"),
+    ],
+)
+def test_normalize_committee_trims_trailing_model_chatter(value, expected):
+    assert normalize_committee(value) == expected
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Outrage then Action PAC", "Leaders We Deserve", "United We Dream Action",
+     "We Stand With Dave Reichert (R)", "VPP", "NRSC", "Educated. We Stand."],
+)
+def test_normalize_committee_keeps_real_names_that_resemble_chatter(name):
+    assert normalize_committee(name) == name

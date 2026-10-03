@@ -406,3 +406,129 @@ def test_generate_topic_html_empty_state():
     assert html.startswith("<!DOCTYPE html>")
     assert "datacenter" in html
     assert "<img" not in html
+
+
+# --- Committees aggregation and page ------------------------------------
+
+def _committee_stats(tmp_path, monkeypatch, files):
+    for rel, records in files.items():
+        _write_jsonl(tmp_path / rel, records)
+    import build_site
+    monkeypatch.setattr(build_site, "DATA_DIR", tmp_path)
+    return compute_stats(build_site.scan_data(), keyword_patterns={}, tracked_people={})["committees"]
+
+
+def test_committees_group_by_fec_id_and_count_non_disclaimer_emails(tmp_path, monkeypatch):
+    result = _committee_stats(tmp_path, monkeypatch, {
+        "2026/01/2026-01-06.jsonl": [
+            {"committee": "Trump National Committee JFC, Inc.", "committee_fec_id": "C00873893",
+             "committee_source": "disclaimer", "disclaimer": True, "party": "R"},
+            {"committee": "Trump National Committee JFC, Inc.", "committee_fec_id": "C00873893",
+             "committee_source": "backfill", "disclaimer": False, "party": "R"},
+            {"committee": "Trump National Committee JFC Inc", "committee_fec_id": "C00873893",
+             "committee_source": "llm:qwen3:4b", "disclaimer": False, "party": "R"},
+            {"committee": "Local Committee", "party": "D"},
+            {"committee": None, "party": "D"},
+        ],
+    })
+
+    assert len(result["committees"]) == 2
+    trump, local = result["committees"]
+    assert trump["name"] == "Trump National Committee JFC, Inc."
+    assert trump["total"] == 3
+    assert trump["fec_id"] == "C00873893"
+    assert trump["party"] == "R"
+    assert trump["sources"] == {"backfill": 1, "disclaimer": 1, "llm": 1}
+    assert local["total"] == 1 and local["fec_id"] is None
+    assert local["sources"] == {"other": 1}
+
+
+def test_committees_track_first_last_seen_and_monthly_buckets(tmp_path, monkeypatch):
+    result = _committee_stats(tmp_path, monkeypatch, {
+        "2026/01/2026-01-31.jsonl": [{"committee": "Alpha", "party": "D"}],
+        "2026/02/2026-02-01.jsonl": [{"committee": "Alpha", "party": "D"},
+                                     {"committee": "Alpha", "party": "D"}],
+        "2026/02/2026-02-03.jsonl": [{"committee": "Beta", "party": "R"}],
+    })
+
+    alpha, beta = result["committees"]
+    assert (alpha["name"], alpha["first_seen"], alpha["last_seen"], alpha["total"]) == (
+        "Alpha", "2026-01-31", "2026-02-01", 3)
+    assert beta["first_seen"] == "2026-02-03"
+    assert result["monthly"] == [["2026-01", 0, 1], ["2026-02", 0, 2], ["2026-02", 1, 1]]
+
+
+def _result_with_totals(totals):
+    return {"committees": [
+        {"name": f"C{i}", "party": "D", "fec_id": None, "first_seen": f"{2020 + i % 3}-01-01",
+         "last_seen": "2026-01-01", "total": t, "sources": {}}
+        for i, t in enumerate(totals)], "monthly": []}
+
+
+def test_committee_concentration_shares_and_half_rank():
+    import build_site
+    result = _result_with_totals([50, 20, 10, 10, 5, 5])  # total 100
+
+    conc = build_site.committee_concentration(result)
+
+    assert conc["total_committees"] == 6 and conc["total_emails"] == 100
+    assert conc["top10_share"] == 1.0
+    assert conc["half_rank"] == 1
+    assert sum(emails for _, emails in conc["segments"]) == 100
+    assert conc["segments"][0][0] == "Top 10 (100%)"
+
+
+def test_committee_concentration_segments_split_on_rank_boundaries():
+    import build_site
+    result = _result_with_totals([10] * 10 + [5] * 40 + [1] * 50 + [1] * 100)
+
+    segments = build_site.committee_concentration(result)["segments"]
+
+    assert [e for _, e in segments] == [100, 200, 50, 100]
+    assert [l.split(" (")[0] for l, _ in segments] == [
+        "Top 10", "Ranks 11–50", "Ranks 51–100", "All others"]
+
+
+def test_committee_concentration_empty():
+    import build_site
+    conc = build_site.committee_concentration({"committees": [], "monthly": []})
+    assert conc["half_rank"] == 0 and conc["segments"] == []
+    assert build_site.build_committee_charts({"committees": [], "monthly": []}) == ""
+
+
+def test_committees_first_seen_by_year_counts_each_committee_once():
+    import build_site
+    result = _result_with_totals([3, 3, 3, 3])  # first_seen years 2020,2021,2022,2020
+
+    assert build_site.committees_first_seen_by_year(result) == {"2020": 2, "2021": 1, "2022": 1}
+
+
+def test_generate_committees_page_links_data_and_controls():
+    import build_site
+
+    html = build_site.generate_committees_html("2026-10-02T12:00:00+00:00")
+
+    assert "fetch('committees.json')" in html
+    assert "const MIN_EMAILS = 10" in html
+    assert "Last 12 months" in html
+    assert 'id="party"' in html and 'id="search"' in html
+    assert "__" not in html.replace("__proto__", "")
+
+
+def test_dashboard_links_committees_and_shows_committee_charts():
+    import build_site
+    stats = {
+        "total_records": 100, "disclaimer_count": 50, "unique_domains": 1,
+        "party_counts": {"D": 40, "R": 40, "OTH": 10, "unknown": 10},
+        "by_year": {"2026": {"total": 100, "D": 40, "R": 40, "OTH": 10, "unknown": 10, "disclaimer": 50}},
+        "top_domains": [("a.com", 5)], "keyword_daily": {}, "all_dates": [],
+        "committees": _result_with_totals([50, 30, 20]),
+    }
+    recent = {"count": 0, "end_iso": "2026-10-02T00:00:00+00:00", "emails": []}
+
+    html = build_site.generate_dashboard_html(stats, {}, recent)
+
+    assert 'href="committees.html"' in html
+    assert "Share of email by committee rank" in html
+    assert "New committees per year" in html
+    assert "3 committees have sent email" in html

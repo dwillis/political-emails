@@ -45,6 +45,7 @@ PARTY_COLORS = {"D": "#2b6cb0", "R": "#c53030", "OTH": "#6b46c1", "unknown": "#a
 KEYWORD_LINE_COLORS = {"Total": ACCENT, **PARTY_COLORS}
 PARTY_BUCKETS = ("D", "R", "OTH", "unknown")
 TRACKED_SENDERS_MIN_EMAILS = 10
+COMMITTEES_MIN_EMAILS = 10
 
 
 def party_bucket(party):
@@ -356,6 +357,134 @@ def compute_sender_mentions(years, people=None):
     return _sender_mention_result(people, tracker)
 
 
+def _source_bucket(source):
+    """Collapse committee_source values into a few display buckets."""
+    text = str(source or "")
+    if text.startswith("llm"):
+        return "llm"
+    if text in ("human", "disclaimer", "backfill"):
+        return text
+    return "other"
+
+
+def _new_committee_tracker():
+    return {"committees": {}, "monthly": defaultdict(int)}
+
+
+def _add_committee(tracker, rec, date_key):
+    """Tally one email toward its committee (any record with a committee,
+    whether or not it carries a disclaimer)."""
+    committee = rec.get("committee")
+    if not committee:
+        return
+    key = committee_group_key(rec)
+    if not key:
+        return
+    entry = tracker["committees"].get(key)
+    if entry is None:
+        entry = tracker["committees"][key] = {
+            "variants": Counter(), "fec_id": None,
+            "first_seen": date_key, "last_seen": date_key,
+            "total": 0, "party_counts": defaultdict(int), "sources": Counter(),
+        }
+    entry["variants"][str(committee).strip()] += 1
+    if rec.get("committee_fec_id"):
+        entry["fec_id"] = rec["committee_fec_id"]
+    entry["first_seen"] = min(entry["first_seen"], date_key)
+    entry["last_seen"] = max(entry["last_seen"], date_key)
+    entry["total"] += 1
+    entry["party_counts"][party_bucket(rec.get("party"))] += 1
+    entry["sources"][_source_bucket(rec.get("committee_source"))] += 1
+    tracker["monthly"][(date_key[:7], key)] += 1
+
+
+def _committee_result(tracker):
+    """Serialize the tracker for committees.json.
+
+    ``committees`` is sorted by total emails (desc, then name). ``monthly`` rows
+    are compact ``[YYYY-MM, committee_index, emails]`` triples that index into it.
+    """
+    entries = []
+    for key, entry in tracker["committees"].items():
+        counts = entry["party_counts"]
+        entries.append((key, {
+            "name": _display_name(entry["variants"]),
+            "party": max(PARTY_BUCKETS, key=lambda bucket: counts[bucket]),
+            "fec_id": entry["fec_id"],
+            "first_seen": entry["first_seen"],
+            "last_seen": entry["last_seen"],
+            "total": entry["total"],
+            "sources": dict(sorted(entry["sources"].items())),
+        }))
+    entries.sort(key=lambda kv: (-kv[1]["total"], kv[1]["name"], kv[0]))
+    index = {key: i for i, (key, _) in enumerate(entries)}
+    monthly = sorted(
+        [month, index[key], n] for (month, key), n in tracker["monthly"].items()
+    )
+    return {"committees": [row for _, row in entries], "monthly": monthly}
+
+
+def committee_concentration(result):
+    """How concentrated email volume is across committees.
+
+    Returns total_committees, total_emails, top10/top50/top100 shares (0-1),
+    half_rank (fewest committees whose emails reach 50% of the total), and
+    ``segments``: disjoint (label, emails) bars that sum to total_emails.
+    """
+    totals = sorted((c["total"] for c in result["committees"]), reverse=True)
+    grand = sum(totals)
+    out = {
+        "total_committees": len(totals), "total_emails": grand,
+        "top10_share": 0.0, "top50_share": 0.0, "top100_share": 0.0,
+        "half_rank": 0, "segments": [],
+    }
+    if not grand:
+        return out
+    for n in (10, 50, 100):
+        out[f"top{n}_share"] = sum(totals[:n]) / grand
+    running = 0
+    for rank, value in enumerate(totals, 1):
+        running += value
+        if running * 2 >= grand:
+            out["half_rank"] = rank
+            break
+    bounds = [(0, 10, "Top 10"), (10, 50, "Ranks 11–50"),
+              (50, 100, "Ranks 51–100"), (100, len(totals), "All others")]
+    for lo, hi, label in bounds:
+        emails = sum(totals[lo:hi])
+        if emails:
+            out["segments"].append((f"{label} ({100 * emails / grand:.0f}%)", emails))
+    return out
+
+
+def committees_first_seen_by_year(result):
+    """Count each committee once, in the year it first appears."""
+    counts = Counter(c["first_seen"][:4] for c in result["committees"])
+    return dict(sorted(counts.items()))
+
+
+def build_committee_charts(result):
+    """Static dashboard charts for committee concentration and new committees."""
+    if not result or not result["committees"]:
+        return ""
+    conc = committee_concentration(result)
+    chart_concentration = horizontal_bar_chart(
+        conc["segments"], title="Share of email by committee rank", color=ACCENT,
+        height=230,
+    )
+    chart_new = vertical_bar_chart(
+        committees_first_seen_by_year(result),
+        title="New committees per year", color=ACCENT,
+    )
+    note = (
+        f'<p class="chart-note">{conc["total_committees"]:,} committees have sent email. '
+        f'The top 10 account for {100 * conc["top10_share"]:.0f}% of it, and half of all '
+        f'email comes from {conc["half_rank"]:,} committees. '
+        f'<a href="committees.html">Explore all committees →</a></p>'
+    )
+    return f"{chart_concentration}\n    {note}\n    {chart_new}"
+
+
 def compute_stats(years, keyword_patterns=None, tracked_people=None):
     """Single-pass scan over JSONL files, return rich stats dict.
 
@@ -370,7 +499,8 @@ def compute_stats(years, keyword_patterns=None, tracked_people=None):
         unique_domains: int,
         by_year: { year: {total, D, R, unknown, disclaimer} },
         top_domains: [(domain, count), ...]  sorted desc, top 10,
-        keyword_daily: { keyword: { "YYYY-MM-DD": {"D", "R", "unknown"} } }.
+        keyword_daily: { keyword: { "YYYY-MM-DD": {"D", "R", "unknown"} } },
+        committees: {committees: [...], monthly: [[YYYY-MM, index, emails], ...]}.
     """
     if keyword_patterns is None:
         keyword_patterns = load_tracked_keywords()
@@ -387,6 +517,7 @@ def compute_stats(years, keyword_patterns=None, tracked_people=None):
     by_year = {}
     keyword_daily = {kw: {} for kw in compiled}
     sender_tracker = _new_sender_mention_tracker(tracked_people)
+    committee_tracker = _new_committee_tracker()
     all_dates = set()
 
     for year, months in years.items():
@@ -407,6 +538,7 @@ def compute_stats(years, keyword_patterns=None, tracked_people=None):
                             continue
 
                         _add_sender_mention(sender_tracker, rec, date_key)
+                        _add_committee(committee_tracker, rec, date_key)
 
                         total_records += 1
                         year_stats["total"] += 1
@@ -445,6 +577,7 @@ def compute_stats(years, keyword_patterns=None, tracked_people=None):
         "top_domains": domain_counter.most_common(10),
         "keyword_daily": keyword_daily,
         "sender_mentions": _sender_mention_result(tracked_people, sender_tracker),
+        "committees": _committee_result(committee_tracker),
         "all_dates": sorted(all_dates),
     }
 
@@ -735,6 +868,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
         stats["top_domains"], title="Top 10 sender domains", color=ACCENT
     )
 
+    committee_charts = build_committee_charts(stats.get("committees"))
     keyword_charts = build_keyword_charts(stats)
 
     topics = sorted(load_tracked_keywords().keys())
@@ -833,6 +967,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
       padding: 1rem;
     }
     .dl-all { margin-top: 0.6rem; }
+    .chart-note { margin: -1rem 0 2rem; color: #555; font-size: 0.9rem; }
 
     .recent-meta {
       font-size: 0.85rem; color: #777; margin-bottom: 0.8rem;
@@ -962,6 +1097,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     <p>An archive of political fundraising emails from {year_range}, with daily updates.</p>
     <div class="header-links">
       <a href="downloads.html">All Downloads</a>
+      <a href="committees.html">Committees</a>
       <a href="sender-mentions.html">Sender mentions</a>
       <a href="https://github.com/dwillis/political-emails">GitHub</a>
     </div>
@@ -998,6 +1134,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
     {chart_emails_per_year}
     {chart_party_by_year}
     {chart_top_domains}
+    {committee_charts}
     {keyword_charts}
 
     {topics_nav}
@@ -1293,7 +1430,7 @@ def generate_sender_mentions_html(generated_iso):
   <header>
     <h1>Political <span>Email</span> Archive</h1>
     <p>How often disclaimer-identified political committees mention tracked people.</p>
-    <div class="header-links"><a href="index.html">Home</a><a href="downloads.html">All Downloads</a><a href="https://github.com/dwillis/political-emails">GitHub</a></div>
+    <div class="header-links"><a href="index.html">Home</a><a href="downloads.html">All Downloads</a><a href="committees.html">Committees</a><a href="https://github.com/dwillis/political-emails">GitHub</a></div>
   </header>
   <main>
     <h2>Sender mentions</h2>
@@ -1357,6 +1494,213 @@ fetch('sender_mentions.json').then(r => r.ok ? r.json() : Promise.reject()).then
 </script>
 </body>
 </html>"""
+
+
+_COMMITTEES_PAGE_CSS = """
+    .tracker-intro { color: #555; margin-bottom: 1rem; }
+    .tracker-controls { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; margin: 1rem 0; }
+    .tracker-controls label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; font-weight: 600; }
+    .tracker-controls select, .tracker-controls input { font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: white; }
+    .tracker-controls input { min-width: 14rem; }
+    .tracker-summary { color: #666; font-size: 0.9rem; margin: 0.5rem 0 1rem; }
+    .tracker-chart { width: 100%; min-height: 280px; background: white; border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; margin-bottom: 1rem; }
+    .mention-table { width: 100%; border-collapse: collapse; background: white; font-size: 0.9rem; }
+    .mention-table th, .mention-table td { padding: 0.55rem 0.65rem; border-bottom: 1px solid var(--border); text-align: left; }
+    .mention-table th { color: var(--primary); font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    .mention-table th.sortable { cursor: pointer; user-select: none; }
+    .mention-table th.sortable:hover { text-decoration: underline; }
+    .mention-table td.num, .mention-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .mention-table .party { font-weight: 700; }
+    .show-all { margin: 1rem 0; font: inherit; padding: 0.4rem 0.9rem; border: 1px solid var(--border); border-radius: 4px; background: white; cursor: pointer; }
+    .tracker-error { color: #8b1e1e; }
+"""
+
+_COMMITTEES_PAGE_BODY = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Committees — Political Email Archive</title>
+  <style>__CSS__</style>
+  <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <h1>Political <span>Email</span> Archive</h1>
+    <p>Which committees send the most political email, and how concentrated it is.</p>
+    <div class="header-links"><a href="index.html">Home</a><a href="downloads.html">All Downloads</a><a href="sender-mentions.html">Sender mentions</a><a href="https://github.com/dwillis/political-emails">GitHub</a></div>
+  </header>
+  <main>
+    <h2>Committees</h2>
+    <p class="tracker-intro">Counts every email with an identified committee, with or without a campaign disclaimer. Committees are grouped by FEC ID where known, otherwise by normalized name. Committees need at least __MIN__ emails in the selected period to appear in the table.</p>
+    <p class="tracker-intro"><a href="committees.json">Download the complete monthly data (JSON)</a></p>
+    <div class="tracker-controls">
+      <label>Period <select id="period"></select></label>
+      <label>Party <select id="party"><option value="all">All</option><option value="D">Democratic</option><option value="R">Republican</option><option value="OTH">Other (I/G)</option><option value="unknown">Unknown</option></select></label>
+      <label>Search <input id="search" type="search" placeholder="Committee name or FEC ID"></label>
+    </div>
+    <p class="tracker-summary" id="summary">Loading…</p>
+    <svg class="tracker-chart" id="conc-chart" viewBox="0 0 800 280" role="img" aria-label="Cumulative share of email by committee rank"></svg>
+    <svg class="tracker-chart" id="new-chart" viewBox="0 0 800 280" role="img" aria-label="New committees over time"></svg>
+    <div id="table"></div>
+  </main>
+  <footer>Generated __GENERATED__ UTC. Created by <a href="mailto:dpwillis@umd.edu">Derek Willis</a>. Released under the <a href="https://github.com/dwillis/political-emails/blob/main/LICENSE">MIT License</a>.</footer>
+<script>
+const MIN_EMAILS = __MIN__;
+const ROW_CAP = 500;
+const ACCENT = '__ACCENT__';
+const PARTY_NAMES = {D: 'D', R: 'R', OTH: 'Other', unknown: '—'};
+let data;
+let sortKey = 'total', sortDir = -1, showAll = false;
+const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const MONTHS = ['Jan.', 'Feb.', 'Mar.', 'Apr.', 'May', 'Jun.', 'Jul.', 'Aug.', 'Sep.', 'Oct.', 'Nov.', 'Dec.'];
+const fmtMonth = m => { const p = m.split('-'); return MONTHS[+p[1] - 1] + ' ' + p[0]; };
+
+function monthMatcher() {
+  const v = period.value;
+  if (v === 'all') return () => true;
+  if (v === '12') {
+    const last = data.months[data.months.length - 1].split('-');
+    let y = +last[0], m = +last[1] - 11;
+    if (m < 1) { m += 12; y -= 1; }
+    const cutoff = y + '-' + String(m).padStart(2, '0');
+    return mo => mo >= cutoff;
+  }
+  return mo => mo.slice(0, 4) === v;
+}
+
+function compute() {
+  const inPeriod = monthMatcher();
+  const wantParty = party.value;
+  const totals = new Map();
+  data.monthly.forEach(([mo, i, n]) => {
+    if (!inPeriod(mo)) return;
+    if (wantParty !== 'all' && data.committees[i].party !== wantParty) return;
+    totals.set(i, (totals.get(i) || 0) + n);
+  });
+  return { inPeriod, totals, wantParty };
+}
+
+function renderConcentration(totals) {
+  const svg = document.getElementById('conc-chart');
+  const values = [...totals.values()].sort((a, b) => b - a);
+  if (!values.length) { svg.innerHTML = '<text x="400" y="140" text-anchor="middle">No emails in this period.</text>'; return; }
+  const grand = values.reduce((a, b) => a + b, 0);
+  const left = 45, top = 25, width = 730, height = 195;
+  const n = values.length;
+  const xAt = rank => left + (n === 1 ? width / 2 : width * Math.log(rank) / Math.log(n));
+  let run = 0, half = 0;
+  const pts = values.map((v, i) => { run += v; if (!half && run * 2 >= grand) half = i + 1; return xAt(i + 1) + ',' + (top + height - height * run / grand); });
+  const ticks = [1, 10, 100, 1000, 10000].filter(t => t <= n);
+  if (ticks[ticks.length - 1] !== n) ticks.push(n);
+  const xTicks = ticks.map(t => '<line x1="' + xAt(t) + '" y1="' + (top + height) + '" x2="' + xAt(t) + '" y2="' + (top + height + 4) + '" stroke="#aaa"/><text x="' + xAt(t) + '" y="' + (top + height + 17) + '" text-anchor="middle" font-size="11">' + t.toLocaleString() + '</text>').join('');
+  const hx = xAt(half), hy = top + height - height / 2;
+  const label = 'Top ' + half.toLocaleString() + ' of ' + n.toLocaleString() + ' committees send half of all email';
+  const anchor = hx > left + width * 0.6 ? 'end' : 'start';
+  const lx = anchor === 'end' ? hx - 8 : hx + 8;
+  svg.innerHTML = '<line x1="' + left + '" y1="' + (top + height) + '" x2="' + (left + width) + '" y2="' + (top + height) + '" stroke="#aaa"/><line x1="' + left + '" y1="' + top + '" x2="' + left + '" y2="' + (top + height) + '" stroke="#aaa"/>'
+    + '<line x1="' + left + '" y1="' + hy + '" x2="' + hx + '" y2="' + hy + '" stroke="#ccc" stroke-dasharray="4 3"/>'
+    + '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + ACCENT + '" stroke-width="3"/>'
+    + '<circle cx="' + hx + '" cy="' + hy + '" r="4" fill="#1e4d2b"/><text x="' + lx + '" y="' + (hy + 18) + '" text-anchor="' + anchor + '" font-size="12">' + esc(label) + '</text>'
+    + '<text x="' + left + '" y="15" font-size="12">Cumulative share of emails, committees ranked by volume (log scale)</text>'
+    + '<text x="5" y="' + (top + 5) + '" font-size="11">100%</text><text x="14" y="' + (top + height) + '" font-size="11">0%</text>' + xTicks
+    + '<text x="' + (left + width / 2) + '" y="' + (top + height + 33) + '" text-anchor="middle" font-size="11">Committee rank</text>';
+}
+
+function renderNew(inPeriod) {
+  const svg = document.getElementById('new-chart');
+  const counts = new Map();
+  const yearly = period.value === 'all';
+  data.committees.forEach(c => {
+    if (party.value !== 'all' && c.party !== party.value) return;
+    const mo = c.first_seen.slice(0, 7);
+    if (!inPeriod(mo)) return;
+    const k = yearly ? mo.slice(0, 4) : mo;
+    counts.set(k, (counts.get(k) || 0) + 1);
+  });
+  const keys = [...new Set(data.months.filter(inPeriod).map(m => yearly ? m.slice(0, 4) : m))].sort();
+  if (!keys.length) { svg.innerHTML = '<text x="400" y="140" text-anchor="middle">No data in this period.</text>'; return; }
+  const left = 45, top = 25, width = 730, height = 195;
+  const max = Math.max(5, ...keys.map(k => counts.get(k) || 0));
+  const niceMax = Math.ceil(max / 5) * 5;
+  const slot = width / keys.length, bw = Math.max(1, slot * 0.7);
+  const every = Math.max(1, Math.ceil(keys.length / 12));
+  const bars = keys.map((k, i) => {
+    const v = counts.get(k) || 0, h = height * v / niceMax, x = left + i * slot + (slot - bw) / 2;
+    const lab = i % every === 0 ? '<text x="' + (x + bw / 2) + '" y="' + (top + height + 15) + '" text-anchor="end" transform="rotate(-30 ' + (x + bw / 2) + ' ' + (top + height + 15) + ')" font-size="11">' + (yearly ? k : fmtMonth(k)) + '</text>' : '';
+    return '<rect x="' + x + '" y="' + (top + height - h) + '" width="' + bw + '" height="' + h + '" fill="' + ACCENT + '"><title>' + (yearly ? k : fmtMonth(k)) + ': ' + v.toLocaleString() + ' new</title></rect>' + lab;
+  }).join('');
+  svg.innerHTML = '<line x1="' + left + '" y1="' + (top + height) + '" x2="' + (left + width) + '" y2="' + (top + height) + '" stroke="#aaa"/><line x1="' + left + '" y1="' + top + '" x2="' + left + '" y2="' + (top + height) + '" stroke="#aaa"/>'
+    + bars + '<text x="' + left + '" y="15" font-size="12">New committees per ' + (yearly ? 'year' : 'month') + ' (first email seen)</text>'
+    + '<text x="5" y="' + (top + 5) + '" font-size="11">' + niceMax.toLocaleString() + '</text><text x="30" y="' + (top + height) + '" font-size="11">0</text>';
+}
+
+function dominantSource(sources) {
+  return Object.entries(sources).sort((a, b) => b[1] - a[1])[0][0];
+}
+
+function renderTable(totals) {
+  const grand = [...totals.values()].reduce((a, b) => a + b, 0);
+  const q = search.value.trim().toLowerCase();
+  let rows = [...totals.entries()].filter(([, n]) => n >= MIN_EMAILS).map(([i, n]) => ({ c: data.committees[i], n }));
+  const hidden = totals.size - rows.length;
+  if (q) rows = rows.filter(r => r.c.name.toLowerCase().includes(q) || (r.c.fec_id || '').toLowerCase().includes(q));
+  const keyFn = { total: r => r.n, name: r => r.c.name.toLowerCase(), first_seen: r => r.c.first_seen, last_seen: r => r.c.last_seen }[sortKey];
+  rows.sort((a, b) => { const x = keyFn(a), y = keyFn(b); return (x < y ? -1 : x > y ? 1 : 0) * sortDir || b.n - a.n; });
+  summary.textContent = grand.toLocaleString() + ' emails from ' + totals.size.toLocaleString() + ' committees in this period; ' + (totals.size - hidden).toLocaleString() + ' have at least ' + MIN_EMAILS + ' emails' + (q ? ' (' + rows.length.toLocaleString() + ' match the search)' : '') + '.';
+  const shown = showAll ? rows : rows.slice(0, ROW_CAP);
+  const th = (key, label, cls) => '<th class="sortable ' + (cls || '') + '" data-sort="' + key + '">' + label + (sortKey === key ? (sortDir < 0 ? ' ▼' : ' ▲') : '') + '</th>';
+  if (!rows.length) { table.innerHTML = '<p>No committees met the minimum email threshold in this period.</p>'; return; }
+  const body = shown.map(({ c, n }) => {
+    const name = c.fec_id ? '<a href="https://www.fec.gov/data/committee/' + encodeURIComponent(c.fec_id) + '/">' + esc(c.name) + '</a>' : esc(c.name);
+    const mix = Object.entries(c.sources).map(([k, v]) => k + ': ' + v.toLocaleString()).join(', ');
+    return '<tr><td>' + name + '</td><td class="party">' + esc(PARTY_NAMES[c.party] || c.party) + '</td><td class="num">' + n.toLocaleString() + '</td><td class="num">' + (100 * n / grand).toFixed(2) + '%</td><td>' + esc(c.first_seen) + '</td><td>' + esc(c.last_seen) + '</td><td title="' + esc(mix) + '">' + esc(dominantSource(c.sources)) + '</td></tr>';
+  }).join('');
+  const more = !showAll && rows.length > ROW_CAP ? '<button class="show-all" id="show-all">Show all ' + rows.length.toLocaleString() + ' committees</button>' : '';
+  table.innerHTML = '<table class="mention-table"><thead><tr>' + th('name', 'Committee') + '<th>Party</th>' + th('total', 'Emails', 'num') + '<th class="num">Share</th>' + th('first_seen', 'First seen') + th('last_seen', 'Last seen') + '<th>Source</th></tr></thead><tbody>' + body + '</tbody></table>' + more;
+}
+
+function render() {
+  const { inPeriod, totals } = compute();
+  renderConcentration(totals);
+  renderNew(inPeriod);
+  renderTable(totals);
+}
+
+fetch('committees.json').then(r => r.ok ? r.json() : Promise.reject()).then(d => {
+  data = d;
+  data.months = [...new Set(d.monthly.map(r => r[0]))].sort();
+  const years = [...new Set(data.months.map(m => m.slice(0, 4)))].sort().reverse();
+  period.add(new Option('Last 12 months', '12'));
+  years.forEach(y => period.add(new Option(y, y)));
+  period.add(new Option('All time', 'all'));
+  period.value = 'all';
+  period.addEventListener('change', () => { showAll = false; render(); });
+  party.addEventListener('change', () => { showAll = false; render(); });
+  search.addEventListener('input', () => { showAll = false; render(); });
+  table.addEventListener('click', e => {
+    if (e.target.id === 'show-all') { showAll = true; render(); return; }
+    const key = e.target.dataset && e.target.dataset.sort;
+    if (!key) return;
+    if (sortKey === key) sortDir = -sortDir; else { sortKey = key; sortDir = key === 'name' ? 1 : -1; }
+    render();
+  });
+  render();
+}).catch(() => { summary.innerHTML = '<span class="tracker-error">The committee data could not be loaded.</span>'; });
+</script>
+</body>
+</html>"""
+
+
+def generate_committees_html(generated_iso):
+    """Generate the client-rendered committees page (committees.html)."""
+    return (
+        _COMMITTEES_PAGE_BODY
+        .replace("__CSS__", SHARED_CSS + _COMMITTEES_PAGE_CSS)
+        .replace("__GENERATED__", escape(str(generated_iso)[:16].replace("T", " ")))
+        .replace("__MIN__", str(COMMITTEES_MIN_EMAILS))
+        .replace("__ACCENT__", ACCENT)
+    )
 
 
 def generate_downloads_html(download_info):
@@ -1467,6 +1811,7 @@ def generate_downloads_html(download_info):
     <p>All monthly and yearly JSONL archives ({year_range}).</p>
     <div class="header-links">
       <a href="index.html">← Dashboard</a>
+      <a href="committees.html">Committees</a>
       <a href="https://github.com/dwillis/political-emails">GitHub</a>
     </div>
   </header>
@@ -1538,6 +1883,16 @@ def main():
     sender_page = DOCS_DIR / "sender-mentions.html"
     sender_page.write_text(generate_sender_mentions_html(sender_mentions["generated_at"]))
     print(f"  Wrote {sender_page}")
+
+    committees = stats["committees"]
+    committees["generated_at"] = sender_mentions["generated_at"]
+    committees["minimum_display_emails"] = COMMITTEES_MIN_EMAILS
+    (DOCS_DIR / "committees.json").write_text(
+        json.dumps(committees, ensure_ascii=False, separators=(",", ":"))
+    )
+    committees_page = DOCS_DIR / "committees.html"
+    committees_page.write_text(generate_committees_html(committees["generated_at"]))
+    print(f"  Wrote {committees_page} ({len(committees['committees']):,} committees)")
 
     dash_path = DOCS_DIR / "index.html"
     dash_path.write_text(generate_dashboard_html(stats, download_info, recent_summary))
