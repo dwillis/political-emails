@@ -4,7 +4,180 @@
       "id": "person:donald_trump",
       "type": "person",
       "name": "Donald Trump",
-      "aliases": ["Donald J. Trump", "Donald J Trump", "President Trump"]
+      "aliases": [
+        "Donald J. Trump",
+        "Donald J Trump",
+        "President Trump"
+      ]
+    },
+    {
+      "id": "person:elon_musk",
+      "type": "person",
+      "name": "Elon Musk",
+      "aliases": [],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "98d3ed4e1352",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "person:sherrod_brown",
+      "type": "person",
+      "name": "Sherrod Brown",
+      "aliases": [],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "98d3ed4e1352",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "person:governor_newsom",
+      "type": "person",
+      "name": "Governor Newsom",
+      "aliases": [
+        "Gov. Newsom"
+      ],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "2d3c49f8ca61",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "person:adam_hamilton",
+      "type": "person",
+      "name": "Adam Hamilton",
+      "aliases": [],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "31d336e2499e",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "person:roy_cooper",
+      "type": "person",
+      "name": "Roy Cooper",
+      "aliases": [],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "893409573618",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "person:marilyn_strickland",
+      "type": "person",
+      "name": "Marilyn Strickland",
+      "aliases": [
+        "Congresswoman Marilyn Strickland"
+      ],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "b1118fdf2afb",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "person:chris_pappas",
+      "type": "person",
+      "name": "Chris Pappas",
+      "aliases": [],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "4a500c098c71",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "person:robert_garcia",
+      "type": "person",
+      "name": "Robert Garcia",
+      "aliases": [],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "a5962844524b",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "organization:justice_department",
+      "type": "organization",
+      "name": "Department of Justice",
+      "aliases": [
+        "Justice Department",
+        "DOJ"
+      ],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "a0c19e682856",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "organization:homeland_security",
+      "type": "organization",
+      "name": "Department of Homeland Security",
+      "aliases": [
+        "DHS"
+      ],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "a0c19e682856",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "organization:postal_service",
+      "type": "organization",
+      "name": "U.S. Postal Service",
+      "aliases": [
+        "US Postal Service",
+        "Postal Service",
+        "USPS"
+      ],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "a0c19e682856",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "organization:congressional_black_caucus",
+      "type": "organization",
+      "name": "Congressional Black Caucus",
+      "aliases": [
+        "CBC"
+      ],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "c793e5ae0f72",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "organization:actblue",
+      "type": "organization",
+      "name": "ActBlue",
+      "aliases": [],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "47378edcc5d6",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
+    },
+    {
+      "id": "organization:actblue_express",
+      "type": "organization",
+      "name": "ActBlue Express",
+      "aliases": [],
+      "evidence": {
+        "source": "data/2026/08/2026-08-31.jsonl",
+        "email_id_prefix": "31d336e2499e",
+        "review": "Source-grounded alias review; local ID, not an official identifier"
+      }
     }
   ]
 }

@@ -386,6 +386,7 @@ def _add_committee(tracker, rec, date_key):
             "variants": Counter(), "fec_id": None,
             "first_seen": date_key, "last_seen": date_key,
             "total": 0, "party_counts": defaultdict(int), "sources": Counter(),
+            "domains": {},
         }
     entry["variants"][str(committee).strip()] += 1
     if rec.get("committee_fec_id"):
@@ -396,6 +397,15 @@ def _add_committee(tracker, rec, date_key):
     entry["party_counts"][party_bucket(rec.get("party"))] += 1
     entry["sources"][_source_bucket(rec.get("committee_source"))] += 1
     tracker["monthly"][(date_key[:7], key)] += 1
+    domain = str(rec.get("domain") or "").strip().lower()
+    if domain:
+        dom = entry["domains"].get(domain)
+        if dom is None:
+            entry["domains"][domain] = [1, date_key, date_key]
+        else:
+            dom[0] += 1
+            dom[1] = min(dom[1], date_key)
+            dom[2] = max(dom[2], date_key)
 
 
 def _committee_result(tracker):
@@ -405,7 +415,12 @@ def _committee_result(tracker):
     are compact ``[YYYY-MM, committee_index, emails]`` triples that index into it.
     """
     entries = []
+    domains = {}
     for key, entry in tracker["committees"].items():
+        domains[key] = sorted(
+            ([d, *v] for d, v in entry["domains"].items()),
+            key=lambda row: (-row[1], row[0]),
+        )
         counts = entry["party_counts"]
         entries.append((key, {
             "name": _display_name(entry["variants"]),
@@ -421,7 +436,12 @@ def _committee_result(tracker):
     monthly = sorted(
         [month, index[key], n] for (month, key), n in tracker["monthly"].items()
     )
-    return {"committees": [row for _, row in entries], "monthly": monthly}
+    return {
+        "committees": [row for _, row in entries], "monthly": monthly,
+        # Per committee (aligned with ``committees``): [domain, emails, first, last]
+        # rows. Written to committee_domains.json, not committees.json.
+        "domains": [domains[key] for key, _ in entries],
+    }
 
 
 def committee_concentration(result):
@@ -1513,6 +1533,12 @@ _COMMITTEES_PAGE_CSS = """
     .mention-table .party { font-weight: 700; }
     .show-all { margin: 1rem 0; font: inherit; padding: 0.4rem 0.9rem; border: 1px solid var(--border); border-radius: 4px; background: white; cursor: pointer; }
     .tracker-error { color: #8b1e1e; }
+    .domains-link { margin-left: 0.5rem; font-size: 0.8rem; white-space: nowrap; }
+    .domains-row > td { background: #f7f9f7; padding: 0.5rem 0.65rem 0.9rem 2rem; }
+    .domain-table { border-collapse: collapse; font-size: 0.85rem; background: white; }
+    .domain-table th, .domain-table td { padding: 0.3rem 0.8rem; border-bottom: 1px solid var(--border); text-align: left; }
+    .domain-table th { font-size: 0.7rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--primary); }
+    .domain-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 """
 
 _COMMITTEES_PAGE_BODY = """<!DOCTYPE html>
@@ -1552,6 +1578,8 @@ const ACCENT = '__ACCENT__';
 const PARTY_NAMES = {D: 'D', R: 'R', OTH: 'Other', unknown: '—'};
 let data;
 let sortKey = 'total', sortDir = -1, showAll = false;
+let domainData = null, domainLoad = null;
+const openDomains = new Set();
 const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const MONTHS = ['Jan.', 'Feb.', 'Mar.', 'Apr.', 'May', 'Jun.', 'Jul.', 'Aug.', 'Sep.', 'Oct.', 'Nov.', 'Dec.'];
 const fmtMonth = m => { const p = m.split('-'); return MONTHS[+p[1] - 1] + ' ' + p[0]; };
@@ -1639,6 +1667,20 @@ function dominantSource(sources) {
   return Object.entries(sources).sort((a, b) => b[1] - a[1])[0][0];
 }
 
+function domainRow(i) {
+  const rows = domainData && domainData[i];
+  let inner;
+  if (!domainData) inner = 'Loading domains…';
+  else if (!rows || !rows.length) inner = 'No sender domains recorded.';
+  else inner = '<table class="domain-table"><thead><tr><th>Domain</th><th class="num">Emails</th><th>First seen</th><th>Last seen</th></tr></thead><tbody>'
+    + rows.map(r => '<tr><td>' + esc(r[0]) + '</td><td class="num">' + r[1].toLocaleString() + '</td><td>' + esc(r[2]) + '</td><td>' + esc(r[3]) + '</td></tr>').join('') + '</tbody></table>';
+  return '<tr class="domains-row"><td colspan="7">' + inner + '</td></tr>';
+}
+
+function loadDomains() {
+  if (!domainLoad) domainLoad = fetch('committee_domains.json').then(r => r.ok ? r.json() : Promise.reject()).then(d => { domainData = d; render(); }).catch(() => { domainLoad = null; openDomains.clear(); summary.innerHTML = '<span class="tracker-error">The domain data could not be loaded.</span>'; });
+}
+
 function renderTable(totals) {
   const grand = [...totals.values()].reduce((a, b) => a + b, 0);
   const q = search.value.trim().toLowerCase();
@@ -1654,7 +1696,9 @@ function renderTable(totals) {
   const body = shown.map(({ c, n }) => {
     const name = c.fec_id ? '<a href="https://www.fec.gov/data/committee/' + encodeURIComponent(c.fec_id) + '/">' + esc(c.name) + '</a>' : esc(c.name);
     const mix = Object.entries(c.sources).map(([k, v]) => k + ': ' + v.toLocaleString()).join(', ');
-    return '<tr><td>' + name + '</td><td class="party">' + esc(PARTY_NAMES[c.party] || c.party) + '</td><td class="num">' + n.toLocaleString() + '</td><td class="num">' + (100 * n / grand).toFixed(2) + '%</td><td>' + esc(c.first_seen) + '</td><td>' + esc(c.last_seen) + '</td><td title="' + esc(mix) + '">' + esc(dominantSource(c.sources)) + '</td></tr>';
+    const open = openDomains.has(data.committees.indexOf(c));
+    const link = '<a href="#" class="domains-link" data-domains="' + data.committees.indexOf(c) + '">' + (open ? 'Hide domains' : 'Domains') + '</a>';
+    return '<tr><td>' + name + link + '</td><td class="party">' + esc(PARTY_NAMES[c.party] || c.party) + '</td><td class="num">' + n.toLocaleString() + '</td><td class="num">' + (100 * n / grand).toFixed(2) + '%</td><td>' + esc(c.first_seen) + '</td><td>' + esc(c.last_seen) + '</td><td title="' + esc(mix) + '">' + esc(dominantSource(c.sources)) + '</td></tr>' + (open ? domainRow(data.committees.indexOf(c)) : '');
   }).join('');
   const more = !showAll && rows.length > ROW_CAP ? '<button class="show-all" id="show-all">Show all ' + rows.length.toLocaleString() + ' committees</button>' : '';
   table.innerHTML = '<table class="mention-table"><thead><tr>' + th('name', 'Committee') + '<th>Party</th>' + th('total', 'Emails', 'num') + '<th class="num">Share</th>' + th('first_seen', 'First seen') + th('last_seen', 'Last seen') + '<th>Source</th></tr></thead><tbody>' + body + '</tbody></table>' + more;
@@ -1680,6 +1724,14 @@ fetch('committees.json').then(r => r.ok ? r.json() : Promise.reject()).then(d =>
   search.addEventListener('input', () => { showAll = false; render(); });
   table.addEventListener('click', e => {
     if (e.target.id === 'show-all') { showAll = true; render(); return; }
+    const di = e.target.dataset && e.target.dataset.domains;
+    if (di !== undefined) {
+      e.preventDefault();
+      const i = +di;
+      if (openDomains.has(i)) openDomains.delete(i); else { openDomains.add(i); loadDomains(); }
+      render();
+      return;
+    }
     const key = e.target.dataset && e.target.dataset.sort;
     if (!key) return;
     if (sortKey === key) sortDir = -sortDir; else { sortKey = key; sortDir = key === 'name' ? 1 : -1; }
@@ -1887,6 +1939,9 @@ def main():
     committees = stats["committees"]
     committees["generated_at"] = sender_mentions["generated_at"]
     committees["minimum_display_emails"] = COMMITTEES_MIN_EMAILS
+    (DOCS_DIR / "committee_domains.json").write_text(
+        json.dumps(committees.pop("domains"), ensure_ascii=False, separators=(",", ":"))
+    )
     (DOCS_DIR / "committees.json").write_text(
         json.dumps(committees, ensure_ascii=False, separators=(",", ":"))
     )
