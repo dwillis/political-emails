@@ -571,3 +571,12 @@ def test_generate_domains_page_search_detail_and_deeplink():
     assert "% of committee's total" in html
     assert "fec.gov/data/committee/" in html
     assert "if (selected) renderDomain(); else renderTop();" in html
+
+
+def test_committees_page_links_to_domains_page():
+    import build_site
+
+    html = build_site.generate_committees_html("2026-10-08T12:00:00+00:00")
+
+    assert '<a href="domains.html">Domains</a>' in html
+    assert "domains.html?d=" in html

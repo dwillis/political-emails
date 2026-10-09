@@ -1554,7 +1554,7 @@ _COMMITTEES_PAGE_BODY = """<!DOCTYPE html>
   <header>
     <h1>Political <span>Email</span> Archive</h1>
     <p>Which committees send the most political email, and how concentrated it is.</p>
-    <div class="header-links"><a href="index.html">Home</a><a href="downloads.html">All Downloads</a><a href="sender-mentions.html">Sender mentions</a><a href="https://github.com/dwillis/political-emails">GitHub</a></div>
+    <div class="header-links"><a href="index.html">Home</a><a href="downloads.html">All Downloads</a><a href="sender-mentions.html">Sender mentions</a><a href="domains.html">Domains</a><a href="https://github.com/dwillis/political-emails">GitHub</a></div>
   </header>
   <main>
     <h2>Committees</h2>
@@ -1673,7 +1673,7 @@ function domainRow(i) {
   if (!domainData) inner = 'Loading domains…';
   else if (!rows || !rows.length) inner = 'No sender domains recorded.';
   else inner = '<table class="domain-table"><thead><tr><th>Domain</th><th class="num">Emails</th><th>First seen</th><th>Last seen</th></tr></thead><tbody>'
-    + rows.map(r => '<tr><td>' + esc(r[0]) + '</td><td class="num">' + r[1].toLocaleString() + '</td><td>' + esc(r[2]) + '</td><td>' + esc(r[3]) + '</td></tr>').join('') + '</tbody></table>';
+    + rows.map(r => '<tr><td><a href="domains.html?d=' + encodeURIComponent(r[0]) + '">' + esc(r[0]) + '</a></td><td class="num">' + r[1].toLocaleString() + '</td><td>' + esc(r[2]) + '</td><td>' + esc(r[3]) + '</td></tr>').join('') + '</tbody></table>';
   return '<tr class="domains-row"><td colspan="7">' + inner + '</td></tr>';
 }
 
