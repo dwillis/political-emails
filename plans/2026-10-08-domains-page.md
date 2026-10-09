@@ -193,7 +193,7 @@ def test_generate_domains_page_renders_top_fifty():
 
     assert "const TOP_N = 50;" in html
     assert "Top 50 domains" in html
-    assert 'data-sort="committees"' in html
+    assert "th('committees', 'Committees', 'num')" in html
     assert "slice(0, TOP_N)" in html
 ```
 
