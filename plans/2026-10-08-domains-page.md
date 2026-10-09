@@ -60,6 +60,7 @@ Insert after `generate_committees_html`'s return (line 1755), before `def genera
 _DOMAINS_PAGE_CSS = """
     .tracker-intro { color: #555; margin-bottom: 1rem; }
     .tracker-controls { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; margin: 1rem 0; }
+    .tracker-controls[hidden] { display: none; }  /* author display beats the UA [hidden] rule otherwise */
     .tracker-controls label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; font-weight: 600; }
     .search-wrap { position: relative; }
     .tracker-controls input { font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: white; min-width: 16rem; }
@@ -376,11 +377,16 @@ function deselect() {
   render(); window.scrollTo(0, 0);
 }
 
-function hideSuggest() { suggest.style.display = 'none'; }
+function hideSuggest() { suggest.style.display = 'none'; suggest.innerHTML = ''; }  // clear, so Enter on a closed dropdown finds nothing
 
 function showSuggest(q) {
-  if (!domains || !q) { hideSuggest(); return; }
-  const matches = domains.filter(d => d[0].indexOf(q) !== -1).slice(0, SUGGEST_MAX);
+  if (!domains.length || !q) { hideSuggest(); return; }
+  // Exact match first, then prefix matches, then other substring matches —
+  // typing a domain in full should offer that domain first.
+  const matches = domains.filter(d => d[0] === q)
+    .concat(domains.filter(d => d[0] !== q && d[0].indexOf(q) === 0))
+    .concat(domains.filter(d => d[0] !== q && d[0].indexOf(q) > 0))
+    .slice(0, SUGGEST_MAX);
   suggest.innerHTML = matches.length ? matches.map(d =>
     '<div class="suggest-item" data-domain="' + esc(d[0]) + '">' + esc(d[0])
     + '<span class="suggest-meta">' + d[1].toLocaleString() + ' emails · ' + d[4].toLocaleString() + ' committees</span></div>'
@@ -540,6 +546,8 @@ Check at `http://localhost:8000/domains.html`:
 6. Back link returns to the top 50 and clears `?d=`.
 7. On `committees.html`, expand a committee's Domains row — a domain cell links through to the matching detail view.
 8. Compare the domains-page summary grand total against the sum of committee totals in `committees.json`; if they differ (committee emails with no parseable sender domain are excluded), qualify the intro wording to "committee-identified emails with a sender domain".
+9. In the detail view, the search box must be gone (the `.tracker-controls[hidden]` CSS rule must actually hide it).
+10. Type a partial domain, press Escape, then press Enter — nothing should navigate (the dropdown must not resurrect stale suggestions).
 
 Kill the server when done (Ctrl-C in the terminal running it).
 
