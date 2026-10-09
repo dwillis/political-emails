@@ -1799,7 +1799,7 @@ _DOMAINS_PAGE_BODY = """<!DOCTYPE html>
   <main>
     <h2 id="viewTitle">Top 50 domains</h2>
     <p class="back-row" id="backRow" hidden><a href="#" id="back-link">← All domains</a></p>
-    <p class="tracker-intro">Counts cover committee-identified emails only, all time — the same email universe as the <a href="committees.html">committees page</a>. They will not match the dashboard's "Top 10 sender domains" chart, which counts every email, committee or not.</p>
+    <p class="tracker-intro">Counts cover committee-identified emails with a sender domain, all time — nearly the same email universe as the <a href="committees.html">committees page</a> (a small number of committee emails have no parseable sender domain). They will not match the dashboard's "Top 10 sender domains" chart, which counts every email, committee or not.</p>
     <p class="tracker-intro"><a href="committee_domains.json">Download the underlying per-committee data (JSON)</a></p>
     <div class="tracker-controls" id="controls"><label>Search <div class="search-wrap"><input id="search" type="search" placeholder="e.g. win.donaldjtrump.com" autocomplete="off"><div class="suggest" id="suggest"></div></div></label></div>
     <p class="tracker-summary" id="summary">Loading…</p>
@@ -2179,6 +2179,10 @@ def main():
     committees_page = DOCS_DIR / "committees.html"
     committees_page.write_text(generate_committees_html(committees["generated_at"]))
     print(f"  Wrote {committees_page} ({len(committees['committees']):,} committees)")
+
+    domains_page = DOCS_DIR / "domains.html"
+    domains_page.write_text(generate_domains_html(committees["generated_at"]))
+    print(f"  Wrote {domains_page}")
 
     dash_path = DOCS_DIR / "index.html"
     dash_path.write_text(generate_dashboard_html(stats, download_info, recent_summary))
