@@ -71,6 +71,13 @@ The page has a searchable, sortable table with period and party filters, plus a
 concentration curve and a new-committees chart. The dashboard shows static
 all-time versions of both charts.
 
+The build also writes `domains.html`: the reverse lookup — for a given sender
+domain, the identified committees that have sent from it. It reuses
+`committees.json` and `committee_domains.json` client-side (no new data file).
+The default view lists the top 50 domains by volume; search covers every
+committee-linked domain, and each selection deep-links as
+`domains.html?d=<domain>`. Counts cover committee-identified emails only.
+
 ### Committee Enrichment
 
 The `committee` field records which political committee sent each email. It is
