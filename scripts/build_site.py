@@ -1758,6 +1758,7 @@ def generate_committees_html(generated_iso):
 _DOMAINS_PAGE_CSS = """
     .tracker-intro { color: #555; margin-bottom: 1rem; }
     .tracker-controls { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; margin: 1rem 0; }
+    .tracker-controls[hidden] { display: none; }
     .tracker-controls label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; font-weight: 600; }
     .search-wrap { position: relative; }
     .tracker-controls input { font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: white; min-width: 16rem; }
@@ -1909,11 +1910,14 @@ function deselect() {
   render(); window.scrollTo(0, 0);
 }
 
-function hideSuggest() { suggest.style.display = 'none'; }
+function hideSuggest() { suggest.style.display = 'none'; suggest.innerHTML = ''; }
 
 function showSuggest(q) {
-  if (!domains || !q) { hideSuggest(); return; }
-  const matches = domains.filter(d => d[0].indexOf(q) !== -1).slice(0, SUGGEST_MAX);
+  if (!domains.length || !q) { hideSuggest(); return; }
+  const matches = domains.filter(d => d[0] === q)
+    .concat(domains.filter(d => d[0] !== q && d[0].indexOf(q) === 0))
+    .concat(domains.filter(d => d[0] !== q && d[0].indexOf(q) > 0))
+    .slice(0, SUGGEST_MAX);
   suggest.innerHTML = matches.length ? matches.map(d =>
     '<div class="suggest-item" data-domain="' + esc(d[0]) + '">' + esc(d[0])
     + '<span class="suggest-meta">' + d[1].toLocaleString() + ' emails · ' + d[4].toLocaleString() + ' committees</span></div>'
