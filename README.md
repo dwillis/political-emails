@@ -64,6 +64,13 @@ keywords, split by party. Keywords and their match patterns live in
 [`config/tracked_keywords.json`](config/tracked_keywords.json) — add an entry to
 track another term.
 
+The build also writes `committees.html` and `committees.json`: monthly email
+counts for every committee that has an identified `committee` (with or without
+a disclaimer), grouped by FEC ID where known and by normalized name otherwise.
+The page has a searchable, sortable table with period and party filters, plus a
+concentration curve and a new-committees chart. The dashboard shows static
+all-time versions of both charts.
+
 ### Committee Enrichment
 
 The `committee` field records which political committee sent each email. It is
