@@ -1820,7 +1820,42 @@ function extremes(rows) {
   return { total, first, last };
 }
 
-function render() { /* added in later tasks */ }
+const TOP_N = 50;
+const SUGGEST_MAX = 15;
+
+function th(key, label, cls) {
+  return '<th class="sortable ' + (cls || '') + '" data-sort="' + key + '">' + label
+    + (sortKey === key ? (sortDir < 0 ? ' ▼' : ' ▲') : '') + '</th>';
+}
+
+function renderTop() {
+  viewTitle.textContent = 'Top 50 domains';
+  backRow.hidden = true; controls.hidden = false;
+  const grand = domains.reduce((s, d) => s + d[1], 0);
+  summary.textContent = grand.toLocaleString() + ' committee-identified emails across '
+    + domains.length.toLocaleString() + ' sender domains from ' + data.committees.length.toLocaleString()
+    + ' committees. The list shows the top ' + TOP_N + ' by volume; search covers every domain.';
+  const keyFns = { domain: d => d[0], committees: d => d[4], total: d => d[1], first_seen: d => d[2], last_seen: d => d[3] };
+  const sorted = domains.slice().sort((a, b) => {
+    const x = keyFns[sortKey](a), y = keyFns[sortKey](b);
+    return (x < y ? -1 : x > y ? 1 : 0) * sortDir || b[1] - a[1];
+  });
+  const body = sorted.slice(0, TOP_N).map((d, i) =>
+    '<tr><td class="rank">' + (i + 1) + '</td><td><a href="#" class="domain-link" data-domain="' + esc(d[0]) + '">' + esc(d[0]) + '</a></td>'
+    + '<td class="num">' + d[4].toLocaleString() + '</td><td class="num">' + d[1].toLocaleString() + '</td>'
+    + '<td>' + esc(d[2]) + '</td><td>' + esc(d[3]) + '</td></tr>'
+  ).join('');
+  table.innerHTML = '<table class="mention-table"><thead><tr><th>Rank</th>' + th('domain', 'Domain')
+    + th('committees', 'Committees', 'num') + th('total', 'Emails', 'num')
+    + th('first_seen', 'First seen') + th('last_seen', 'Last seen')
+    + '</tr></thead><tbody>' + body + '</tbody></table>';
+}
+
+function render() {
+  if (selected) renderDomain(); else renderTop();
+}
+
+function renderDomain() { /* added in Task 3 */ }
 
 Promise.all([
   fetch('committees.json').then(r => r.ok ? r.json() : Promise.reject()),

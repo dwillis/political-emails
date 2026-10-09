@@ -546,3 +546,14 @@ def test_generate_domains_page_shell_and_data_contract():
     assert "Generated 2026-10-08 12:00 UTC." in html
     assert '<a href="committees.html">Committees</a>' in html
     assert "__" not in html  # template placeholders must all be replaced
+
+
+def test_generate_domains_page_renders_top_fifty():
+    import build_site
+
+    html = build_site.generate_domains_html("2026-10-08T12:00:00+00:00")
+
+    assert "const TOP_N = 50;" in html
+    assert "Top 50 domains" in html
+    assert "th('committees', 'Committees', 'num')" in html
+    assert "slice(0, TOP_N)" in html
