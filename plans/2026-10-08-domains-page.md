@@ -224,10 +224,11 @@ function th(key, label, cls) {
 function renderTop() {
   viewTitle.textContent = 'Top 50 domains';
   backRow.hidden = true; controls.hidden = false;
+  if (!domains.length) { summary.textContent = 'No committee-linked emails recorded yet.'; table.innerHTML = ''; return; }
   const grand = domains.reduce((s, d) => s + d[1], 0);
   summary.textContent = grand.toLocaleString() + ' committee-identified emails across '
     + domains.length.toLocaleString() + ' sender domains from ' + data.committees.length.toLocaleString()
-    + ' committees. The list shows the top ' + TOP_N + ' by volume; search covers every domain.';
+    + ' committees. The default list ranks the ' + TOP_N + ' highest-volume domains; search covers every domain.';
   const keyFns = { domain: d => d[0], committees: d => d[4], total: d => d[1], first_seen: d => d[2], last_seen: d => d[3] };
   const sorted = domains.slice().sort((a, b) => {
     const x = keyFns[sortKey](a), y = keyFns[sortKey](b);
@@ -289,6 +290,7 @@ def test_generate_domains_page_search_detail_and_deeplink():
     assert "No committee-linked emails found for" in html
     assert "% of committee's total" in html
     assert "fec.gov/data/committee/" in html
+    assert "if (selected) renderDomain(); else renderTop();" in html
 ```
 
 **Step 2: Run test to verify it fails**
@@ -298,7 +300,27 @@ Expected: FAIL
 
 **Step 3: Implement search, detail view, deep links**
 
-In `_DOMAINS_PAGE_BODY`'s script, replace the `renderDomain` stub with the real view, and add the search/suggestion/selection handlers:
+First, two review follow-ups to `renderTop` (folded in here because Task 3 re-touches this view): make the summary sentence sort-neutral and add an empty-state guard.
+
+In `renderTop`, replace:
+
+```js
+    + ' committees. The list shows the top ' + TOP_N + ' by volume; search covers every domain.';
+```
+
+with:
+
+```js
+    + ' committees. The default list ranks the ' + TOP_N + ' highest-volume domains; search covers every domain.';
+```
+
+and immediately after `backRow.hidden = true; controls.hidden = false;` insert:
+
+```js
+  if (!domains.length) { summary.textContent = 'No committee-linked emails recorded yet.'; table.innerHTML = ''; return; }
+```
+
+Then replace the `renderDomain` stub with the real view, and add the search/suggestion/selection handlers:
 
 ```js
 function renderDomain() {
@@ -517,6 +539,7 @@ Check at `http://localhost:8000/domains.html`:
 5. A bogus URL `?d=notadomain.com` shows the "No committee-linked emails" message.
 6. Back link returns to the top 50 and clears `?d=`.
 7. On `committees.html`, expand a committee's Domains row — a domain cell links through to the matching detail view.
+8. Compare the domains-page summary grand total against the sum of committee totals in `committees.json`; if they differ (committee emails with no parseable sender domain are excluded), qualify the intro wording to "committee-identified emails with a sender domain".
 
 Kill the server when done (Ctrl-C in the terminal running it).
 
