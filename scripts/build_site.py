@@ -1796,8 +1796,8 @@ _DOMAINS_PAGE_BODY = """<!DOCTYPE html>
     <div class="header-links"><a href="index.html">Home</a><a href="downloads.html">All Downloads</a><a href="committees.html">Committees</a><a href="https://github.com/dwillis/political-emails">GitHub</a></div>
   </header>
   <main>
-    <h2 id="view-title">Top 50 domains</h2>
-    <p class="back-row" id="back-row" hidden><a href="#" id="back-link">← All domains</a></p>
+    <h2 id="viewTitle">Top 50 domains</h2>
+    <p class="back-row" id="backRow" hidden><a href="#" id="back-link">← All domains</a></p>
     <p class="tracker-intro">Counts cover committee-identified emails only, all time — the same email universe as the <a href="committees.html">committees page</a>. They will not match the dashboard's "Top 10 sender domains" chart, which counts every email, committee or not.</p>
     <p class="tracker-intro"><a href="committee_domains.json">Download the underlying per-committee data (JSON)</a></p>
     <div class="tracker-controls" id="controls"><label>Search <div class="search-wrap"><input id="search" type="search" placeholder="e.g. win.donaldjtrump.com" autocomplete="off"><div class="suggest" id="suggest"></div></div></label></div>
@@ -1809,7 +1809,7 @@ _DOMAINS_PAGE_BODY = """<!DOCTYPE html>
 const PARTY_NAMES = {D: 'D', R: 'R', OTH: 'Other', unknown: '—'};
 const byDomain = new Map();   // domain -> [[cIdx, emails, first, last], ...] (cIdx indexes into data.committees)
 let domains = [];             // [domain, total_emails, first_seen, last_seen, committee_count] sorted by emails desc
-let data, domainRows;
+let data;
 let selected = null;          // selected domain, or null for the top-50 view
 let sortKey = 'total', sortDir = -1;   // reset on every view change
 const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1826,7 +1826,7 @@ Promise.all([
   fetch('committees.json').then(r => r.ok ? r.json() : Promise.reject()),
   fetch('committee_domains.json').then(r => r.ok ? r.json() : Promise.reject()),
 ]).then(([committees, perCommittee]) => {
-  data = committees; domainRows = perCommittee;
+  data = committees;
   perCommittee.forEach((rows, cIdx) => rows.forEach(row => {
     const list = byDomain.get(row[0]);
     if (list) list.push([cIdx, row[1], row[2], row[3]]);
@@ -1838,7 +1838,7 @@ Promise.all([
   }).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   // Deep link: ?d=<domain> selects a domain on load (build lowercases domain keys).
   const want = new URL(location.href).searchParams.get('d');
-  if (want) selected = want;
+  if (want) selected = want.toLowerCase();
   render();
 }).catch(() => { summary.innerHTML = '<span class="tracker-error">The domain data could not be loaded.</span>'; });
 </script>
