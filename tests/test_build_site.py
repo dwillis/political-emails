@@ -557,3 +557,17 @@ def test_generate_domains_page_renders_top_fifty():
     assert "Top 50 domains" in html
     assert "th('committees', 'Committees', 'num')" in html
     assert "slice(0, TOP_N)" in html
+
+
+def test_generate_domains_page_search_detail_and_deeplink():
+    import build_site
+
+    html = build_site.generate_domains_html("2026-10-08T12:00:00+00:00")
+
+    assert "suggest-item" in html
+    assert "history.replaceState" in html
+    assert "searchParams.get('d')" in html
+    assert "No committee-linked emails found for" in html
+    assert "% of committee's total" in html
+    assert "fec.gov/data/committee/" in html
+    assert "if (selected) renderDomain(); else renderTop();" in html

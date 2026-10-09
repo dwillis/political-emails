@@ -1831,10 +1831,11 @@ function th(key, label, cls) {
 function renderTop() {
   viewTitle.textContent = 'Top 50 domains';
   backRow.hidden = true; controls.hidden = false;
+  if (!domains.length) { summary.textContent = 'No committee-linked emails recorded yet.'; table.innerHTML = ''; return; }
   const grand = domains.reduce((s, d) => s + d[1], 0);
   summary.textContent = grand.toLocaleString() + ' committee-identified emails across '
     + domains.length.toLocaleString() + ' sender domains from ' + data.committees.length.toLocaleString()
-    + ' committees. The list shows the top ' + TOP_N + ' by volume; search covers every domain.';
+    + ' committees. The default list ranks the ' + TOP_N + ' highest-volume domains; search covers every domain.';
   const keyFns = { domain: d => d[0], committees: d => d[4], total: d => d[1], first_seen: d => d[2], last_seen: d => d[3] };
   const sorted = domains.slice().sort((a, b) => {
     const x = keyFns[sortKey](a), y = keyFns[sortKey](b);
@@ -1855,7 +1856,98 @@ function render() {
   if (selected) renderDomain(); else renderTop();
 }
 
-function renderDomain() { /* added in Task 3 */ }
+function renderDomain() {
+  viewTitle.textContent = selected;
+  backRow.hidden = false; controls.hidden = true;
+  const rows = selected ? byDomain.get(selected.toLowerCase()) : null;
+  if (!rows || !rows.length) {
+    summary.innerHTML = 'No committee-linked emails found for <strong>' + esc(selected) + '</strong>.';
+    table.innerHTML = '';
+    return;
+  }
+  const x = extremes(rows);
+  summary.textContent = x.total.toLocaleString() + ' committee-identified emails from '
+    + rows.length.toLocaleString() + (rows.length === 1 ? ' committee' : ' committees')
+    + ', first seen ' + x.first + ', last seen ' + x.last + '.';
+  const keyFns = { name: r => r.c.name.toLowerCase(), total: r => r.n, pct: r => r.n / r.c.total, first_seen: r => r.first, last_seen: r => r.last };
+  const shown = rows.map(r => ({ c: data.committees[r[0]], n: r[1], first: r[2], last: r[3] }))
+    .sort((a, b) => {
+      const x1 = keyFns[sortKey](a), y1 = keyFns[sortKey](b);
+      return (x1 < y1 ? -1 : x1 > y1 ? 1 : 0) * sortDir || b.n - a.n;
+    });
+  const body = shown.map(r => {
+    const name = r.c.fec_id
+      ? '<a href="https://www.fec.gov/data/committee/' + encodeURIComponent(r.c.fec_id) + '/">' + esc(r.c.name) + '</a>'
+      : esc(r.c.name);
+    const pct = r.c.total ? 100 * r.n / r.c.total : 0;
+    return '<tr><td>' + name + '</td><td class="party">' + esc(PARTY_NAMES[r.c.party] || r.c.party) + '</td>'
+      + '<td class="num">' + r.n.toLocaleString() + '</td><td class="num">' + pct.toFixed(1) + '%</td>'
+      + '<td>' + esc(r.first) + '</td><td>' + esc(r.last) + '</td></tr>';
+  }).join('');
+  table.innerHTML = '<table class="mention-table"><thead><tr>' + th('name', 'Committee') + '<th>Party</th>'
+    + th('total', 'Emails', 'num') + th('pct', "% of committee's total", 'num')
+    + th('first_seen', 'First seen') + th('last_seen', 'Last seen')
+    + '</tr></thead><tbody>' + body + '</tbody></table>';
+}
+
+function setUrlParam(domain) {
+  const url = new URL(location.href);
+  if (domain) url.searchParams.set('d', domain); else url.searchParams.delete('d');
+  history.replaceState(null, '', url);
+}
+
+function selectDomain(domain) {
+  selected = domain; sortKey = 'total'; sortDir = -1;
+  setUrlParam(domain);
+  search.value = ''; hideSuggest();
+  render(); window.scrollTo(0, 0);
+}
+
+function deselect() {
+  selected = null; sortKey = 'total'; sortDir = -1;
+  setUrlParam(null);
+  render(); window.scrollTo(0, 0);
+}
+
+function hideSuggest() { suggest.style.display = 'none'; }
+
+function showSuggest(q) {
+  if (!domains || !q) { hideSuggest(); return; }
+  const matches = domains.filter(d => d[0].indexOf(q) !== -1).slice(0, SUGGEST_MAX);
+  suggest.innerHTML = matches.length ? matches.map(d =>
+    '<div class="suggest-item" data-domain="' + esc(d[0]) + '">' + esc(d[0])
+    + '<span class="suggest-meta">' + d[1].toLocaleString() + ' emails · ' + d[4].toLocaleString() + ' committees</span></div>'
+  ).join('') : '<div class="suggest-empty">No matching domains.</div>';
+  suggest.style.display = 'block';
+}
+
+search.addEventListener('input', () => showSuggest(search.value.trim().toLowerCase()));
+search.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const first = suggest.querySelector('.suggest-item');
+    if (first) selectDomain(first.dataset.domain);
+  } else if (e.key === 'Escape') {
+    hideSuggest();
+  }
+});
+suggest.addEventListener('mousedown', e => {
+  const item = e.target.closest && e.target.closest('.suggest-item');
+  if (item) { e.preventDefault(); selectDomain(item.dataset.domain); }
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest || !e.target.closest('.search-wrap')) hideSuggest();
+});
+backRow.addEventListener('click', e => {
+  if (e.target.id === 'back-link') { e.preventDefault(); deselect(); }
+});
+table.addEventListener('click', e => {
+  if (e.target.dataset && e.target.dataset.domain) { e.preventDefault(); selectDomain(e.target.dataset.domain); return; }
+  const key = e.target.dataset && e.target.dataset.sort;
+  if (!key) return;
+  if (sortKey === key) sortDir = -sortDir;
+  else { sortKey = key; sortDir = (key === 'domain' || key === 'name') ? 1 : -1; }
+  render();
+});
 
 Promise.all([
   fetch('committees.json').then(r => r.ok ? r.json() : Promise.reject()),
