@@ -580,3 +580,5 @@ def test_committees_page_links_to_domains_page():
 
     assert '<a href="domains.html">Domains</a>' in html
     assert "domains.html?d=" in html
+    # data-domain cells must be URL-encoded, not just string-concatenated, into the href
+    assert "domains.html?d=' + encodeURIComponent(r[0])" in html
