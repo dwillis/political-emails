@@ -532,3 +532,17 @@ def test_dashboard_links_committees_and_shows_committee_charts():
     assert "Share of email by committee rank" in html
     assert "New committees per year" in html
     assert "3 committees have sent email" in html
+
+
+def test_generate_domains_page_shell_and_data_contract():
+    import build_site
+
+    html = build_site.generate_domains_html("2026-10-08T12:00:00+00:00")
+
+    assert html.startswith("<!DOCTYPE html>")
+    assert "<title>Domains — Political Email Archive</title>" in html
+    assert "fetch('committees.json')" in html
+    assert "fetch('committee_domains.json')" in html
+    assert "Generated 2026-10-08 12:00 UTC." in html
+    assert '<a href="committees.html">Committees</a>' in html
+    assert "__" not in html  # template placeholders must all be replaced

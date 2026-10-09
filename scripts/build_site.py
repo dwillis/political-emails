@@ -1755,6 +1755,106 @@ def generate_committees_html(generated_iso):
     )
 
 
+_DOMAINS_PAGE_CSS = """
+    .tracker-intro { color: #555; margin-bottom: 1rem; }
+    .tracker-controls { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; margin: 1rem 0; }
+    .tracker-controls label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; font-weight: 600; }
+    .search-wrap { position: relative; }
+    .tracker-controls input { font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: white; min-width: 16rem; }
+    .tracker-summary { color: #666; font-size: 0.9rem; margin: 0.5rem 0 1rem; }
+    .suggest { display: none; position: absolute; top: 100%; left: 0; width: 100%; max-width: 40rem; z-index: 20; background: white; border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); max-height: 24rem; overflow-y: auto; }
+    .suggest-item { padding: 0.4rem 0.7rem; font-size: 0.85rem; cursor: pointer; }
+    .suggest-item:hover { background: #f2f6f2; }
+    .suggest-meta { display: block; color: #777; font-size: 0.75rem; }
+    .suggest-empty { padding: 0.4rem 0.7rem; font-size: 0.85rem; color: #777; }
+    .mention-table { width: 100%; border-collapse: collapse; background: white; font-size: 0.9rem; }
+    .mention-table th, .mention-table td { padding: 0.55rem 0.65rem; border-bottom: 1px solid var(--border); text-align: left; }
+    .mention-table th { color: var(--primary); font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    .mention-table th.sortable { cursor: pointer; user-select: none; }
+    .mention-table th.sortable:hover { text-decoration: underline; }
+    .mention-table td.num, .mention-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .mention-table .party { font-weight: 700; }
+    .back-row { margin: 0 0 0.5rem; }
+    .back-row a { color: var(--primary); font-size: 0.9rem; }
+    .rank { color: #888; font-variant-numeric: tabular-nums; }
+    .tracker-error { color: #8b1e1e; }
+"""
+
+_DOMAINS_PAGE_BODY = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Domains — Political Email Archive</title>
+  <style>__CSS__</style>
+  <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <h1>Political <span>Email</span> Archive</h1>
+    <p>The reverse of the committees page: choose a sender domain and see every identified committee that has sent from it.</p>
+    <div class="header-links"><a href="index.html">Home</a><a href="downloads.html">All Downloads</a><a href="committees.html">Committees</a><a href="https://github.com/dwillis/political-emails">GitHub</a></div>
+  </header>
+  <main>
+    <h2 id="view-title">Top 50 domains</h2>
+    <p class="back-row" id="back-row" hidden><a href="#" id="back-link">← All domains</a></p>
+    <p class="tracker-intro">Counts cover committee-identified emails only, all time — the same email universe as the <a href="committees.html">committees page</a>. They will not match the dashboard's "Top 10 sender domains" chart, which counts every email, committee or not.</p>
+    <p class="tracker-intro"><a href="committee_domains.json">Download the underlying per-committee data (JSON)</a></p>
+    <div class="tracker-controls" id="controls"><label>Search <div class="search-wrap"><input id="search" type="search" placeholder="e.g. win.donaldjtrump.com" autocomplete="off"><div class="suggest" id="suggest"></div></div></label></div>
+    <p class="tracker-summary" id="summary">Loading…</p>
+    <div id="table"></div>
+  </main>
+  <footer>Generated __GENERATED__ UTC. Created by <a href="mailto:dpwillis@umd.edu">Derek Willis</a>. Released under the <a href="https://github.com/dwillis/political-emails/blob/main/LICENSE">MIT License</a>.</footer>
+<script>
+const PARTY_NAMES = {D: 'D', R: 'R', OTH: 'Other', unknown: '—'};
+const byDomain = new Map();   // domain -> [[cIdx, emails, first, last], ...] (cIdx indexes into data.committees)
+let domains = [];             // [domain, total_emails, first_seen, last_seen, committee_count] sorted by emails desc
+let data, domainRows;
+let selected = null;          // selected domain, or null for the top-50 view
+let sortKey = 'total', sortDir = -1;   // reset on every view change
+const esc = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function extremes(rows) {
+  let total = 0, first = '9999-99-99', last = '';
+  rows.forEach(r => { total += r[1]; if (r[2] < first) first = r[2]; if (r[3] > last) last = r[3]; });
+  return { total, first, last };
+}
+
+function render() { /* added in later tasks */ }
+
+Promise.all([
+  fetch('committees.json').then(r => r.ok ? r.json() : Promise.reject()),
+  fetch('committee_domains.json').then(r => r.ok ? r.json() : Promise.reject()),
+]).then(([committees, perCommittee]) => {
+  data = committees; domainRows = perCommittee;
+  perCommittee.forEach((rows, cIdx) => rows.forEach(row => {
+    const list = byDomain.get(row[0]);
+    if (list) list.push([cIdx, row[1], row[2], row[3]]);
+    else byDomain.set(row[0], [[cIdx, row[1], row[2], row[3]]]);
+  }));
+  domains = [...byDomain.entries()].map(([domain, rows]) => {
+    const x = extremes(rows);
+    return [domain, x.total, x.first, x.last, rows.length];
+  }).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  // Deep link: ?d=<domain> selects a domain on load (build lowercases domain keys).
+  const want = new URL(location.href).searchParams.get('d');
+  if (want) selected = want;
+  render();
+}).catch(() => { summary.innerHTML = '<span class="tracker-error">The domain data could not be loaded.</span>'; });
+</script>
+</body>
+</html>"""
+
+
+def generate_domains_html(generated_iso):
+    """Generate the client-rendered domains page (domains.html)."""
+    return (
+        _DOMAINS_PAGE_BODY
+        .replace("__CSS__", SHARED_CSS + _DOMAINS_PAGE_CSS)
+        .replace("__GENERATED__", escape(str(generated_iso)[:16].replace("T", " ")))
+    )
+
+
 def generate_downloads_html(download_info):
     """Generate the full downloads archive page (downloads.html)."""
     if not download_info:
