@@ -99,3 +99,20 @@ def test_no_disclaimer_returns_none():
     assert extract_committee("Just a normal email with no disclaimer at all") is None
     assert extract_committee("") is None
     assert extract_committee(None) is None
+
+
+def test_extract_committee_skips_body_prose_for_real_disclaimer():
+    body = ("This campaign is paid for by the Democrat Socialists. **_And if he wins, "
+            "they'll cash in.\n\nPaid for by Ken Paxton for Senate\n")
+    assert extract_committee(body) == "Ken Paxton for Senate"
+
+
+@pytest.mark.parametrize("name,ok", [
+    ("Ted Cruz for Senate**", True),
+    ("Yassamin Ansari for Congress.**", True),
+    ("Friends of J. Smith", True),
+    ("Democrat Socialists. **_And if he wins", False),
+    ("U.S. Government._** Yep", False),
+])
+def test_looks_confident_rejects_prose_after_sentence(name, ok):
+    assert looks_confident(name) is ok

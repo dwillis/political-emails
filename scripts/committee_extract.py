@@ -198,6 +198,9 @@ def extract_from_tail(tail):
     return name
 
 
+PROSE_AFTER_SENTENCE_RE = re.compile(r"[.!?][\s\[]*[*_]+[*_\s\[]*[A-Z]")
+
+
 def looks_confident(name):
     """Heuristic sanity check: does this look like a real committee name?"""
     if not name:
@@ -216,6 +219,11 @@ def looks_confident(name):
     ]
     if any(b in low for b in bad_substrings):
         return False
+    # Sentence end, then markdown emphasis opening a new sentence: the parse ran
+    # into body prose ("Democrat Socialists. **_And if he wins"). Trailing
+    # emphasis on a real name ("Ted Cruz for Senate**") is fine.
+    if PROSE_AFTER_SENTENCE_RE.search(name):
+        return False
 
     if name.split()[-1].lower() in DANGLING_WORDS:
         return False
@@ -228,14 +236,18 @@ def looks_confident(name):
 
 
 def extract_committee(email_body):
-    """Return the first plausible "Paid for by" committee name, or None.
+    """Return the first confident "Paid for by" committee name, or None.
 
-    Mirrors the deterministic pass of IdentifyCommitteeModule.forward: the first
-    'Paid for by' match whose cleaned tail is longer than 2 chars. Callers decide
-    acceptance via looks_confident().
+    Falls back to the first plausible match (cleaned tail longer than 2 chars)
+    when none looks confident; callers decide acceptance via looks_confident().
     """
+    first = None
     for m in PAID_FOR_BY_RE.finditer(email_body or ""):
         name = extract_from_tail(m.group(1))
         if name and len(name) > 2:
-            return name
-    return None
+            # Body copy can say "paid for by the Democrat Socialists" before
+            # the real footer disclaimer; prefer the first confident match.
+            if looks_confident(name):
+                return name
+            first = first or name
+    return first
