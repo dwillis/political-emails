@@ -1,11 +1,13 @@
 """Tests for the party sweep record fixer."""
 
-from apply_party_fixes import make_record_fixer
+from apply_party_fixes import make_record_fixer, recent_day_files
+from utils import DATA_DIR
 
 
-def fixer(committee_map=None, domain_map=None, cand_full=None, cand_initial=None):
+def fixer(committee_map=None, domain_map=None, cand_full=None, cand_initial=None,
+          fec_party_map=None, blocked=frozenset()):
     return make_record_fixer(committee_map or {}, domain_map or {},
-                             cand_full or {}, cand_initial or {})
+                             cand_full or {}, cand_initial or {}, fec_party_map, blocked)
 
 
 def test_fill_from_committee_map():
@@ -101,3 +103,92 @@ def test_candidate_fill_idempotent():
     assert tags2 - {"source_key_added"} == set()
     assert "source_key_added" not in tags2
     assert rec["party_source"] == "fec-candidate"
+
+
+# --- resolved committee_fec_id ---
+
+def test_fec_id_fills_null():
+    fix = fixer(fec_party_map={"C001": "R"})
+    rec = {"committee": "YOUR AMERICA PAC", "committee_fec_id": "C001",
+           "party": None, "body": ""}
+    tags, _old, new = fix(rec)
+    assert new == "R" and rec["party_source"] == "fec" and "filled" in tags
+
+
+def test_fec_id_beats_name_exact_match():
+    # Name exact-matches a different candidate's D committee; the record's
+    # resolved id is an R committee, so no D correction.
+    fix = fixer({"casey for congress": ("D", "fec")}, fec_party_map={"C_R": "R", "C_D": "D"})
+    rec = {"committee": "Casey for Congress", "committee_fec_id": "C_R",
+           "party": "R", "body": ""}
+    tags, _old, new = fix(rec)
+    assert new == "R" and rec["party_source"] == "fec"
+    assert "corrected" not in tags
+
+
+def test_fec_id_blank_party_drops_name_match():
+    # Resolved committee has no FEC party: the name-exact match (another
+    # committee) must not label it.
+    fix = fixer({"taylor for congress": ("I", "fec")}, fec_party_map={"C_BLANK": None})
+    rec = {"committee": "Taylor for Congress", "committee_fec_id": "C_BLANK",
+           "party": "R", "body": "", "urls": []}
+    _tags, _old, new = fix(rec)
+    assert new == "R"
+
+
+def test_override_beats_fec_id():
+    fix = fixer({"save america jfc": ("R", "override")}, fec_party_map={"C1": "D"})
+    rec = {"committee": "Save America JFC", "committee_fec_id": "C1", "party": None, "body": ""}
+    fix(rec)
+    assert rec["party"] == "R" and rec["party_source"] == "override"
+
+
+def test_fec_id_idempotent():
+    fix = fixer(fec_party_map={"C001": "R"})
+    rec = {"committee": "X PAC", "committee_fec_id": "C001", "party": None, "body": ""}
+    fix(rec)
+    tags2, _o, _n = fix(rec)
+    assert tags2 == set()
+
+
+def test_recent_day_files():
+    files = [DATA_DIR / "2026" / "10" / f"2026-10-{d:02d}.jsonl" for d in (1, 14, 15)]
+    files.append(DATA_DIR / "undated.jsonl")
+    assert recent_day_files(files, "2026-10-14") == files[1:3]
+
+
+def test_fec_id_does_not_overwrite_curated_domain_label():
+    # Registry linked the wrong committee; the domain-map label stands.
+    fix = fixer(domain_map={"elizabethwarren.com": "D"}, fec_party_map={"C_WRONG": "R"})
+    rec = {"committee": "Warren for President", "committee_fec_id": "C_WRONG",
+           "party": "D", "party_source": "domain-map", "domain": "elizabethwarren.com",
+           "body": "", "urls": []}
+    tags, _old, new = fix(rec)
+    assert new == "D" and rec["party_source"] == "domain-map" and tags == set()
+
+
+def test_unresolved_fec_id_ignores_name_exact_match():
+    # Backfill visited the record but the registry left it unresolved (None):
+    # the exact-name FEC match (another McCarthy) must not flip the label.
+    fix = fixer({"mccarthy for congress": ("D", "fec")})
+    rec = {"committee": "McCarthy for Congress", "committee_fec_id": None,
+           "party": "R", "party_source": "fec", "body": "", "urls": []}
+    tags, _old, new = fix(rec)
+    assert new == "R" and "corrected" not in tags
+
+
+def test_none_override_blocks_fec_id():
+    fix = fixer(fec_party_map={"C1": "R"}, blocked={"some org"})
+    rec = {"committee": "Some Org", "committee_fec_id": "C1", "party": None, "body": ""}
+    fix(rec)
+    assert rec["party"] is None
+
+
+def test_fec_id_does_not_overwrite_candidate_supported_label():
+    # After a sweep retags the label fec-candidate, the wrong id still loses.
+    fix = fixer(cand_full={"elizabeth warren": {"D"}}, fec_party_map={"C_WRONG": "R"})
+    rec = {"committee": "Warren for President", "name": "Elizabeth Warren",
+           "committee_fec_id": "C_WRONG", "party": "D", "party_source": "fec-candidate",
+           "body": "", "urls": []}
+    _tags, _old, new = fix(rec)
+    assert new == "D" and rec["party_source"] == "fec-candidate"

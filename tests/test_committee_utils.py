@@ -6,6 +6,7 @@ import pytest
 
 from committee_utils import (
     build_committee_map,
+    committee_from_disclaimer,
     committee_group_key,
     committee_key,
     join_key,
@@ -282,3 +283,10 @@ def test_normalize_committee_trims_trailing_model_chatter(value, expected):
 )
 def test_normalize_committee_keeps_real_names_that_resemble_chatter(name):
     assert normalize_committee(name) == name
+
+
+def test_committee_from_disclaimer():
+    body = "Chip in today. | Paid for by Burchett for Congress | Unsubscribe"
+    assert committee_from_disclaimer(body) == "Burchett for Congress"
+    assert committee_from_disclaimer("no disclaimer here") is None
+    assert committee_from_disclaimer(None) is None

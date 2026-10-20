@@ -15,6 +15,8 @@ import re
 import sys
 import unicodedata
 
+from committee_utils import committee_from_disclaimer
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -480,8 +482,9 @@ def process_single_email(message, domain_party_map):
     record['body'] = body
     record['clean_body'] = clean_body
     record['urls'] = urls
-    record['committee'] = None
-    record['committee_source'] = None
+    committee = committee_from_disclaimer(body)
+    record['committee'] = committee
+    record['committee_source'] = 'disclaimer' if committee else None
     record['party_source'] = party_source
 
     return record

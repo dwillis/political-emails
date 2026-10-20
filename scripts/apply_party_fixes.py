@@ -1,4 +1,4 @@
-"""One-time sweep that derives party from committees and adds party_source.
+"""Sweep that derives party from committees and adds party_source.
 
 Two phases:
   A. Aggregate a committee -> (party, source) map from override CSV + FEC party
@@ -13,10 +13,12 @@ data separately from code.
     uv run python scripts/apply_party_fixes.py --month 2024-11 --dry-run
     uv run python scripts/apply_party_fixes.py --dry-run
     uv run python scripts/apply_party_fixes.py
+    uv run python scripts/apply_party_fixes.py --recent-days 7   # daily pipeline
 """
 
 import argparse
 from collections import Counter, defaultdict
+from datetime import date, timedelta
 
 from committee_utils import iter_day_files, norm_label
 from party_utils import (
@@ -60,7 +62,12 @@ def aggregate():
 
 
 def build_map(committee_counts, name_eligible):
-    """Build the committee -> (party, source) map, plus FEC exact-match eligibility."""
+    """Build the committee -> (party, source) map, plus FEC exact-match eligibility.
+
+    Returns (committee_map, fec_party_map, blocked): the FEC party map lets the
+    record fixer key party on each record's resolved committee_fec_id, and
+    blocked holds the NONE-override names that must stay underived.
+    """
     from fec_match import download_fec, load_fec_index, match_name
     download_fec()
     name_index, buckets = load_fec_index()
@@ -79,11 +86,46 @@ def build_map(committee_counts, name_eligible):
             name_eligible.add(norm)
 
     overrides = load_party_overrides(OVERRIDES_PATH)
-    return build_committee_party_map(
+    committee_map = build_committee_party_map(
         committee_counts, fec_lookup, fec_party_map, overrides, name_eligible)
+    blocked = {n for n, v in overrides.items() if v == "NONE"}
+    return committee_map, fec_party_map, blocked
 
 
-def make_record_fixer(committee_map, domain_map, cand_full, cand_initial):
+def make_record_fixer(committee_map, domain_map, cand_full, cand_initial,
+                      fec_party_map=None, blocked=frozenset()):
+    fec_party_map = fec_party_map or {}
+
+    def committee_derived(rec, committee):
+        """(party, source) from the committee, or None.
+
+        Once backfill_fec_ids has visited a record (the committee_fec_id key is
+        present), the resolved id replaces the name-keyed map's exact-name FEC
+        entry: generic names ("Casey for Congress", "McCarthy for Congress")
+        exact-match some other candidate's committee, and a None id means the
+        registry deliberately left the name unresolved. Overrides still win;
+        `blocked` (NONE overrides) suppresses the id path too.
+        """
+        norm = norm_label(committee) if committee else None
+        derived = committee_map.get(norm) if norm else None
+        if "committee_fec_id" not in rec or (derived and derived[1] == "override"):
+            return derived
+        if norm in blocked:
+            return None
+        if derived and derived[1] == "fec":
+            derived = None
+        fp = fec_party_map.get(rec["committee_fec_id"])
+        if not fp:
+            return derived
+        # A label with independent support (candidate name, domain map,
+        # platform) outranks a resolved id that contradicts it: the registry
+        # occasionally links the wrong cycle's or candidate's committee
+        # ("Warren for President" -> WARREN FOR PRESIDENT 16).
+        party = fold_party(rec.get("party"))
+        if party and party != fp and reprovenance(rec, party) != "legacy":
+            return None
+        return (fp, "fec")
+
     def candidate_party(rec):
         """Party from an FEC candidate named in the committee string or sender."""
         for text in (rec.get("committee"), rec.get("name")):
@@ -144,7 +186,7 @@ def make_record_fixer(committee_map, domain_map, cand_full, cand_initial):
         if orig_source == "human":
             new_party, new_source = party, "human"
         else:
-            derived = committee_map.get(norm_label(committee)) if committee else None
+            derived = committee_derived(rec, committee)
             dsrc = derived[1] if derived else None
             if derived and dsrc != "committee-majority":
                 # override / fec / committee-name: authoritative; fills or corrects.
@@ -185,24 +227,34 @@ def make_record_fixer(committee_map, domain_map, cand_full, cand_initial):
     return fix_party_record
 
 
+def recent_day_files(day_files, cutoff):
+    """Dated day files (stem YYYY-MM-DD) on or after `cutoff`; undated excluded."""
+    return [p for p in day_files
+            if p.parent.parent.parent == DATA_DIR and p.stem >= cutoff]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--year", help="Limit to YYYY")
     parser.add_argument("--month", help="Limit to YYYY-MM")
     parser.add_argument("--limit-days", type=int, default=None)
+    parser.add_argument("--recent-days", type=int, default=None,
+                        help="Rewrite only day files from the last N days (daily "
+                             "pipeline); aggregation still scans the whole archive")
     args = parser.parse_args()
 
     print("Phase A: aggregating committee party signals...")
     committee_counts, name_eligible = aggregate()
-    committee_map = build_map(committee_counts, name_eligible)
+    committee_map, fec_party_map, blocked = build_map(committee_counts, name_eligible)
     src_dist = Counter(s for _p, s in committee_map.values())
     print(f"  committees mapped: {len(committee_map):,}  by source: {dict(src_dist)}")
 
     domain_map = load_domain_party_map(DOMAIN_MAP_PATH)
     cand_full, cand_initial = load_candidate_name_index()
     print(f"  candidate name index: {len(cand_full):,} full, {len(cand_initial):,} initial")
-    fix = make_record_fixer(committee_map, domain_map, cand_full, cand_initial)
+    fix = make_record_fixer(committee_map, domain_map, cand_full, cand_initial,
+                            fec_party_map, blocked)
 
     day_files = iter_day_files()
     if args.year:
@@ -210,6 +262,9 @@ def main():
     if args.month:
         y, m = args.month.split("-")
         day_files = [p for p in day_files if p.stem.startswith(f"{y}-{m}")]
+    if args.recent_days:
+        cutoff = (date.today() - timedelta(days=args.recent_days)).isoformat()
+        day_files = recent_day_files(day_files, cutoff)
     if args.limit_days:
         day_files = day_files[: args.limit_days]
 
@@ -256,7 +311,7 @@ def main():
             f"{s}={n:,}" for s, n in fills_by_source.most_common()))
     if corrections:
         print("\n  sample corrections (committee: old -> new):")
-        for date, email, com, old, new in corrections[:15]:
+        for _date, email, com, old, new in corrections[:15]:
             print(f"    {str(com)[:34]:34} {old} -> {new}   {email}")
 
 

@@ -2,7 +2,7 @@
 
 from email.message import EmailMessage
 
-from process_email import determine_party, extract_html
+from process_email import determine_party, extract_html, process_single_email
 
 
 def _multipart_email(plain, html):
@@ -69,3 +69,23 @@ def test_party_anedot_not_republican():
 
 def test_party_no_signal():
     assert determine_party("just text", "unknown.com", DMAP) == (None, None)
+
+
+def test_process_single_email_sets_committee_from_disclaimer():
+    msg = EmailMessage()
+    msg["Subject"] = "Test"
+    msg["From"] = "Tim Burchett <info@email.tim-burchett.com>"
+    msg["Date"] = "Mon, 20 Oct 2026 14:16:00 +0000"
+    msg.set_content("Chip in today.\n\nPaid for by Burchett for Congress\n")
+    rec = process_single_email(msg, {})
+    assert rec["committee"] == "Burchett for Congress"
+    assert rec["committee_source"] == "disclaimer"
+
+
+def test_process_single_email_no_disclaimer_leaves_committee_null():
+    msg = EmailMessage()
+    msg["Subject"] = "Test"
+    msg["From"] = "x@example.org"
+    msg.set_content("Hello there.")
+    rec = process_single_email(msg, {})
+    assert rec["committee"] is None and rec["committee_source"] is None

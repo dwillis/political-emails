@@ -262,11 +262,13 @@ def load_party_overrides(path):
     return overrides
 
 
-def derive_committee_party(committee, fill_source, fec_lookup, fec_party_map, overrides):
+def derive_committee_party(committee, fill_source, fec_lookup, fec_party_map, overrides,
+                           fec_id=None):
     """Single-record party derivation for enrichment time (no majority signal).
 
     Precedence: override > FEC > committee-name (only when the committee came
-    from a disclaimer/human source). Returns (party, source) or (None, None).
+    from a disclaimer/human source). A resolved `fec_id` replaces the exact-name
+    FEC lookup. Returns (party, source) or (None, None).
     """
     norm = norm_label(committee)
     if not norm:
@@ -276,7 +278,7 @@ def derive_committee_party(committee, fill_source, fec_lookup, fec_party_map, ov
         return (None, None)
     if ov in PARTIES:
         return (ov, "override")
-    fid = fec_lookup(norm)
+    fid = fec_id or fec_lookup(norm)
     fec_party = fec_party_map.get(fid) if fid else None
     if fec_party:
         return (fec_party, "fec")

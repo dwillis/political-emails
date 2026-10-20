@@ -44,6 +44,11 @@ jobs:
           cd scripts
           uv run python backfill_fec_ids.py
 
+      - name: Derive party
+        run: |
+          cd scripts
+          uv run python apply_party_fixes.py --recent-days 7
+
       - name: Commit data
         run: |
           git config user.name "github-actions[bot]"
@@ -68,8 +73,9 @@ jobs:
                 (cd scripts && uv run python merge_jsonl_conflicts.py)
                 GIT_EDITOR=true git rebase --continue
                 (cd scripts && uv run python backfill_fec_ids.py)
+                (cd scripts && uv run python apply_party_fixes.py --recent-days 7)
                 git add data/ state/
-                git diff --staged --quiet || git commit -m "Re-run FEC backfill after merge"
+                git diff --staged --quiet || git commit -m "Re-run FEC backfill and party after merge"
               fi
             done
             if [ "$pushed" != "true" ]; then

@@ -6,6 +6,7 @@ tested without the 4 GB qwen file or a running Ollama instance.
 
 import re
 
+from committee_extract import extract_committee, looks_confident
 from utils import DATA_DIR
 
 # Values the model emits that we treat as "no committee determined" -> None.
@@ -272,6 +273,17 @@ def iter_day_files():
     dated = DATA_DIR.glob("[0-9][0-9][0-9][0-9]/[0-9][0-9]/*.jsonl")
     top_level = DATA_DIR.glob("*.jsonl")
     return sorted([*dated, *top_level])
+
+
+def committee_from_disclaimer(body):
+    """Committee from a confident "Paid for by ..." parse of `body`, or None.
+
+    The deterministic first pass of IdentifyCommitteeModule, with no LLM
+    fallback, so collection can set a committee (source "disclaimer") the day
+    mail arrives instead of waiting for the monthly enrichment run.
+    """
+    name = extract_committee(body or "")
+    return normalize_committee(name) if looks_confident(name) else None
 
 
 def needs_committee(record):

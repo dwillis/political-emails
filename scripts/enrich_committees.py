@@ -10,8 +10,12 @@ deliberately NOT in GitHub Actions.
     uv run --group enrich python scripts/enrich_committees.py --month 2026-02
     uv run --group enrich python scripts/enrich_committees.py --since 2026-02-01 --until 2026-02-28
 
-Requires DSPy and a local Ollama at http://localhost:11434 (the default). To
-use SiliconFlow instead, pass --api-base https://api.siliconflow.com/v1 with
+Requires DSPy and a local Ollama at http://localhost:11434 (the default), except
+with --disclaimer-only, which runs just the deterministic parse:
+
+    uv run python scripts/enrich_committees.py --disclaimer-only --since 2026-10-01 --until 2026-10-31
+
+To use SiliconFlow instead, pass --api-base https://api.siliconflow.com/v1 with
 SILICONFLOW_API_KEY (or --api-key) set.
 
 Resumability: each day file is rewritten as soon as it finishes, so a crash
@@ -28,7 +32,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 
-from committee_utils import needs_committee, normalize_committee
+from committee_utils import committee_from_disclaimer, needs_committee, normalize_committee
 from utils import DATA_DIR, load_jsonl, save_jsonl
 
 DEFAULT_MODEL = "qwen3.5:9b"
@@ -135,6 +139,8 @@ def identify(module, rec):
     Safe to call concurrently: DSPy's own Evaluate/optimizers share a single
     module across a thread pool the same way.
     """
+    if module is None:  # --disclaimer-only
+        return committee_from_disclaimer(rec.get("body")), "disclaimer"
     prediction = module(email_body=rec.get("body") or "")
     return normalize_committee(prediction.committee), getattr(prediction, "source", "llm")
 
@@ -166,8 +172,9 @@ def build_party_deriver():
             cache[norm] = fid if mt == "exact" else None
         return cache[norm]
 
-    def derive(committee, fill_source):
-        return derive_committee_party(committee, fill_source, fec_lookup, fec_party_map, overrides)
+    def derive(committee, fill_source, fec_id=None):
+        return derive_committee_party(committee, fill_source, fec_lookup, fec_party_map,
+                                      overrides, fec_id)
 
     return derive
 
@@ -189,18 +196,27 @@ def main():
     parser.add_argument("--allow-thinking", action="store_true", help="Don't disable model reasoning (needed for non-thinking instruct models)")
     parser.add_argument("--skip-party", action="store_true", help="Don't derive party when filling committees")
     parser.add_argument("--dry-run", action="store_true", help="Identify but don't write files")
+    parser.add_argument("--disclaimer-only", action="store_true",
+                        help="Deterministic disclaimer parse only, no LLM (no dspy/Ollama needed)")
     args = parser.parse_args()
 
-    configure_dspy(args.model, args.api_base, disable_thinking=not args.allow_thinking,
-                   api_key=args.api_key)
-    # Import after imports so a missing dspy fails inside configure_dspy above.
-    from identify_committee import IdentifyCommitteeModule
+    if args.disclaimer_only:
+        module = None
+        args.workers = 1
+    else:
+        configure_dspy(args.model, args.api_base, disable_thinking=not args.allow_thinking,
+                       api_key=args.api_key)
+        # Import after imports so a missing dspy fails inside configure_dspy above.
+        from identify_committee import IdentifyCommitteeModule
 
-    module = IdentifyCommitteeModule()
+        module = IdentifyCommitteeModule()
     derive_party = None if args.skip_party else build_party_deriver()
     start, end = resolve_range(args)
-    backend = "Ollama" if is_ollama(args.api_base) else "SiliconFlow"
-    print(f"Enriching committees for {start} .. {end} (LLM fallback: {backend} '{args.model}')")
+    if args.disclaimer_only:
+        print(f"Enriching committees for {start} .. {end} (disclaimer parse only, no LLM)")
+    else:
+        backend = "Ollama" if is_ollama(args.api_base) else "SiliconFlow"
+        print(f"Enriching committees for {start} .. {end} (LLM fallback: {backend} '{args.model}')")
 
     processed = 0
     filled = 0
@@ -246,7 +262,8 @@ def main():
                 day_changed = True
                 # Derive party from the newly-known committee (never overrides human).
                 if derive_party is not None and rec.get("party_source") != "human":
-                    p, psrc = derive_party(committee, committee_source)
+                    p, psrc = derive_party(committee, committee_source,
+                                           rec.get("committee_fec_id"))
                     if p is not None and rec.get("party") != p:
                         rec["party"] = p
                         rec["party_source"] = psrc

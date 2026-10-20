@@ -84,6 +84,22 @@ def test_derive_committee_party():
     assert derive_committee_party("Democratic Party of Ohio", "llm:x", lambda n: None, {}, {}) == (None, None)
 
 
+def test_derive_committee_party_prefers_resolved_fec_id():
+    # "Casey for Congress" exact-matches some other Casey's D committee; the
+    # registry-resolved id (an R committee) wins.
+    fec_lookup = lambda n: "C_OTHER"  # noqa: E731
+    fec_party = {"C_OTHER": "D", "C_MINE": "R"}
+    assert derive_committee_party("Casey for Congress", "disclaimer", fec_lookup,
+                                  fec_party, {}, fec_id="C_MINE") == ("R", "fec")
+    # no resolved id -> exact-name fallback
+    assert derive_committee_party("Casey for Congress", "disclaimer", fec_lookup,
+                                  fec_party, {}) == ("D", "fec")
+    # override still beats the resolved id
+    assert derive_committee_party("Casey for Congress", "disclaimer", fec_lookup,
+                                  fec_party, {"casey for congress": "I"},
+                                  fec_id="C_MINE") == ("I", "override")
+
+
 # --- candidate-name matching ---
 
 @pytest.mark.parametrize(
