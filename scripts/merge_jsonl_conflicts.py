@@ -8,6 +8,7 @@ afterward to re-enrich any records that only exist on the replayed side.
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 from utils import save_jsonl
 
@@ -20,9 +21,15 @@ def stage(path, n):
 
 
 def main():
+    # git reports paths relative to the repo root; resolve against it so this
+    # works from scripts/ (as collect.yml runs it), not just the root.
+    root = Path(subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip())
     out = subprocess.run(
         ["git", "diff", "--name-only", "--diff-filter=U"],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, cwd=root,
     ).stdout.split()
     other = [p for p in out if not p.endswith(".jsonl")]
     if other:
@@ -31,8 +38,8 @@ def main():
     for path in out:
         merged = {r["message_id"]: r for r in stage(path, 3)}
         merged.update({r["message_id"]: r for r in stage(path, 2)})
-        save_jsonl(path, list(merged.values()))
-        subprocess.run(["git", "add", path], check=True)
+        save_jsonl(root / path, list(merged.values()))
+        subprocess.run(["git", "add", path], check=True, cwd=root)
         print(f"Merged {path}: {len(merged)} records")
 
 
