@@ -184,6 +184,24 @@ def test_none_override_blocks_fec_id():
     assert rec["party"] is None
 
 
+def test_none_override_clears_automatic_label():
+    fix = fixer(domain_map={"news.com": "R"}, blocked={"daily news"})
+    rec = {"committee": "Daily News", "party": "R", "party_source": "domain-map",
+           "domain": "news.com", "body": "", "urls": []}
+    tags, old, new = fix(rec)
+    assert old == "R" and new is None and rec["party_source"] is None
+    assert tags == {"cleared"}  # not also counted as retagged
+    tags2, _o, _n = fix(rec)
+    assert tags2 == set()  # idempotent
+
+
+def test_none_override_keeps_human_label():
+    fix = fixer(blocked={"daily news"})
+    rec = {"committee": "Daily News", "party": "R", "party_source": "human", "body": ""}
+    fix(rec)
+    assert rec["party"] == "R" and rec["party_source"] == "human"
+
+
 def test_fec_id_does_not_overwrite_candidate_supported_label():
     # After a sweep retags the label fec-candidate, the wrong id still loses.
     fix = fixer(cand_full={"elizabeth warren": {"D"}}, fec_party_map={"C_WRONG": "R"})

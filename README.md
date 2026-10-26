@@ -269,7 +269,7 @@ precedence over the sender domain, since the committee is disclaimer-grounded.
 | value | meaning |
 |-------|---------|
 | `human` | set by a person during review (most authoritative) |
-| `override` | curated [`config/committee_party_overrides.csv`](config/committee_party_overrides.csv) (`NONE` blocks derivation) |
+| `override` | curated [`config/committee_party_overrides.csv`](config/committee_party_overrides.csv) (`NONE` blocks derivation and clears any existing non-human label) |
 | `fec` | FEC committee master, preferring the linked candidate's registered party across cycles |
 | `fec-candidate` | matched a person named in the committee/sender to the FEC candidate master (full name, or nickname via first-initial) |
 | `committee-name` | committee-name keyword (only for disclaimer/human/FEC-matched committees) |

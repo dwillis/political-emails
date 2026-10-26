@@ -185,6 +185,13 @@ def make_record_fixer(committee_map, domain_map, cand_full, cand_initial,
 
         if orig_source == "human":
             new_party, new_source = party, "human"
+        elif committee and norm_label(committee) in blocked:
+            # NONE override: the sender is not a party committee, so clear any
+            # automatic label (domain map, platform, legacy...), not just block
+            # new derivation.
+            new_party, new_source = None, None
+            if party is not None:
+                tags.add("cleared")
         else:
             derived = committee_derived(rec, committee)
             dsrc = derived[1] if derived else None
@@ -215,7 +222,7 @@ def make_record_fixer(committee_map, domain_map, cand_full, cand_initial,
 
         # Detect a provenance change even when the party value is unchanged
         # (e.g. an existing R record whose source becomes "fec").
-        if had_key and new_source != rec.get("party_source"):
+        if had_key and new_source != rec.get("party_source") and "cleared" not in tags:
             tags.add("retagged")
         rec["party"] = new_party
         rec.pop("party_source", None)
@@ -303,7 +310,7 @@ def main():
 
     action = "would change" if args.dry_run else "changed"
     print(f"\n{action} {files_changed:,} of {len(day_files):,} files")
-    for tag in ("source_key_added", "filled", "corrected", "retagged", "folded"):
+    for tag in ("source_key_added", "filled", "corrected", "cleared", "retagged", "folded"):
         print(f"  {tag:16} {counts[tag]:,}")
     print(f"  null party: {null_before:,} -> {null_after:,}")
     if fills_by_source:
