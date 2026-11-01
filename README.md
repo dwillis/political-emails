@@ -78,6 +78,16 @@ The default view lists the top 50 domains by volume; search covers every
 committee-linked domain, and each selection deep-links as
 `domains.html?d=<domain>`. Counts cover committee-identified emails only.
 
+The build also writes `mention-trend.html` and `mention_trend.json`: for each
+person in [`config/tracked_people.json`](config/tracked_people.json), the share
+of disclaimer emails from Republican and Democratic committees that mention
+them, comparing the last 6, 7 or 8 complete weeks with the 14 weeks before.
+The page separates committees changing their own messages from new committees
+joining the mix, breaks the change down by committee type, and lists every
+committee with at least 10 emails in both periods. Mentions are matched before
+the disclaimer and footer, so a committee's own name is not a mention. The
+analysis lives in [`scripts/mention_trend.py`](scripts/mention_trend.py).
+
 ### Committee Enrichment
 
 The `committee` field records which political committee sent each email. It is

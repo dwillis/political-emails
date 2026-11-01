@@ -582,3 +582,19 @@ def test_committees_page_links_to_domains_page():
     assert "domains.html?d=" in html
     # data-domain cells must be URL-encoded, not just string-concatenated, into the href
     assert "domains.html?d=' + encodeURIComponent(r[0])" in html
+
+
+def test_mention_trend_page_and_stats(tmp_path):
+    from build_site import generate_mention_trend_html
+    html = generate_mention_trend_html("2026-11-01T12:00:00+00:00")
+    assert "mention_trend.json" in html and "2026-11-01 12:00" in html
+    assert "__" not in html.split("<script>")[0]  # every template token filled
+
+    path = tmp_path / "2026" / "10" / "2026-10-26.jsonl"
+    _write_jsonl(path, [{"committee": "A PAC", "party": "R", "disclaimer": True,
+                         "subject": "Trump rally", "clean_body": "Join us."}])
+    years = {"2026": {"10": [{"path": str(path), "records": 1}]}}
+    stats = compute_stats(years, keyword_patterns={},
+                          tracked_people={"donald_trump": {"name": "Donald Trump", "patterns": [r"\bTrump\b"]}})
+    weekly = stats["mention_trend"]["people"]["donald_trump"]["weekly"]["R"]
+    assert weekly == [["2026-10-26", 1, 1, 1, 1, 4, 1, 0, 0]]
