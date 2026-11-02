@@ -17,6 +17,9 @@ from pathlib import Path
 
 from utils import DATA_DIR, CONFIG_DIR, count_records
 from committee_utils import committee_group_key
+from committee_registry import load_registry
+import mention_trend
+from mention_trend import mention_text, week_start as _week_start  # noqa: F401  (re-exported)
 from charts import (
     vertical_bar_chart,
     stacked_bar_chart,
@@ -243,34 +246,6 @@ def load_tracked_people():
     if not path.exists():
         return {}
     return json.loads(path.read_text())
-
-
-_DISCLAIMER_START_RE = re.compile(r"\bpaid\s+for\s+(?:by|and)\b", re.IGNORECASE)
-_FOOTER_START_RE = re.compile(
-    r"\b(?:unsubscribe|email\s+preferences|privacy\s+policy|"
-    r"this\s+(?:email|message)\s+was\s+sent\s+to)\b",
-    re.IGNORECASE,
-)
-
-
-def mention_text(rec):
-    """Return the subject and campaign copy eligible for person matching.
-
-    ``clean_body`` removes most markup. Explicitly remove the disclaimer and
-    remaining footer so a name in legal text cannot count as a campaign mention.
-    """
-    body = str(rec.get("clean_body") or rec.get("body") or "")
-    starts = [m.start() for pattern in (_DISCLAIMER_START_RE, _FOOTER_START_RE)
-              if (m := pattern.search(body))]
-    if starts:
-        body = body[:min(starts)]
-    return f"{rec.get('subject', '')} {body}"
-
-
-def _week_start(date_key):
-    """Return the Monday that starts the calendar week containing date_key."""
-    day = date.fromisoformat(date_key)
-    return (day - timedelta(days=day.weekday())).isoformat()
 
 
 def _new_sender_mention_tracker(people):
@@ -538,6 +513,8 @@ def compute_stats(years, keyword_patterns=None, tracked_people=None):
     keyword_daily = {kw: {} for kw in compiled}
     sender_tracker = _new_sender_mention_tracker(tracked_people)
     committee_tracker = _new_committee_tracker()
+    trend_tracker = mention_trend.new_tracker(tracked_people)
+    type_of = mention_trend.registry_type_lookup(load_registry())
     all_dates = set()
 
     for year, months in years.items():
@@ -559,6 +536,7 @@ def compute_stats(years, keyword_patterns=None, tracked_people=None):
 
                         _add_sender_mention(sender_tracker, rec, date_key)
                         _add_committee(committee_tracker, rec, date_key)
+                        mention_trend.add_record(trend_tracker, rec, date_key, type_of)
 
                         total_records += 1
                         year_stats["total"] += 1
@@ -598,6 +576,8 @@ def compute_stats(years, keyword_patterns=None, tracked_people=None):
         "keyword_daily": keyword_daily,
         "sender_mentions": _sender_mention_result(tracked_people, sender_tracker),
         "committees": _committee_result(committee_tracker),
+        "mention_trend": mention_trend.build_payload(
+            trend_tracker, tracked_people, max(all_dates) if all_dates else None),
         "all_dates": sorted(all_dates),
     }
 
@@ -1119,6 +1099,7 @@ def generate_dashboard_html(stats, download_info, recent_summary):
       <a href="downloads.html">All Downloads</a>
       <a href="committees.html">Committees</a>
       <a href="sender-mentions.html">Sender mentions</a>
+      <a href="mention-trend.html">Mention trends</a>
       <a href="https://github.com/dwillis/political-emails">GitHub</a>
     </div>
   </header>
@@ -1450,7 +1431,7 @@ def generate_sender_mentions_html(generated_iso):
   <header>
     <h1>Political <span>Email</span> Archive</h1>
     <p>How often disclaimer-identified political committees mention tracked people.</p>
-    <div class="header-links"><a href="index.html">Home</a><a href="downloads.html">All Downloads</a><a href="committees.html">Committees</a><a href="https://github.com/dwillis/political-emails">GitHub</a></div>
+    <div class="header-links"><a href="index.html">Home</a><a href="downloads.html">All Downloads</a><a href="committees.html">Committees</a><a href="mention-trend.html">Mention trends</a><a href="https://github.com/dwillis/political-emails">GitHub</a></div>
   </header>
   <main>
     <h2>Sender mentions</h2>
@@ -1514,6 +1495,13 @@ fetch('sender_mentions.json').then(r => r.ok ? r.json() : Promise.reject()).then
 </script>
 </body>
 </html>"""
+
+
+def generate_mention_trend_html(generated_iso):
+    """Generate the client-rendered mention-trend page (template lives in
+    mention_trend_page.py to keep this file manageable)."""
+    import mention_trend_page
+    return mention_trend_page.render(generated_iso, SHARED_CSS, PARTY_COLORS, ACCENT)
 
 
 _COMMITTEES_PAGE_CSS = """
@@ -2166,6 +2154,15 @@ def main():
     sender_page = DOCS_DIR / "sender-mentions.html"
     sender_page.write_text(generate_sender_mentions_html(sender_mentions["generated_at"]))
     print(f"  Wrote {sender_page}")
+
+    trend = stats["mention_trend"]
+    trend["generated_at"] = sender_mentions["generated_at"]
+    (DOCS_DIR / "mention_trend.json").write_text(
+        json.dumps(trend, ensure_ascii=False, separators=(",", ":"))
+    )
+    trend_page = DOCS_DIR / "mention-trend.html"
+    trend_page.write_text(generate_mention_trend_html(trend["generated_at"]))
+    print(f"  Wrote {trend_page}")
 
     committees = stats["committees"]
     committees["generated_at"] = sender_mentions["generated_at"]
